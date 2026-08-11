@@ -22,10 +22,12 @@ class RobotNavigationEnv(gym.Env):
         self.max_steps = max_steps
         self.current_step = 0
 
-        # Actions: forward, left, right, stop
+        # forward, left, right, stop
         self.action_space = spaces.Discrete(4)
+        
+        self.reached_target = False
+        self.collision = False
 
-        # Observation:
         # robot_x, robot_y, robot_angle,
         # target_x, target_y,
         # distance_to_target, angle_to_target,
@@ -40,15 +42,13 @@ class RobotNavigationEnv(gym.Env):
         # World boundaries
         self.world_size = 10.0
 
-        # Robot state
+        # state
         self.robot_pos = np.zeros(2, dtype=np.float32)
         self.robot_angle = 0.0
 
-        # Target state
+        # target state
         self.target_pos = np.zeros(2, dtype=np.float32)
 
-        # Simple obstacle representation
-        # For now, we use one obstacle distance placeholder.
         self.obstacle_pos = np.zeros(2, dtype=np.float32)
 
         self.target_radius = 0.5
@@ -60,30 +60,30 @@ class RobotNavigationEnv(gym.Env):
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
-
+    
         self.current_step = 0
-
-        # Random robot position
+        
+        self.reached_target = False
+        
+        self.collision = False
+        
         self.robot_pos = self.np_random.uniform(
             low=-self.world_size / 2,
             high=self.world_size / 2,
             size=(2,)
         ).astype(np.float32)
 
-        # Random robot angle
         self.robot_angle = self.np_random.uniform(
             low=-np.pi,
             high=np.pi
         )
 
-        # Random target position
         self.target_pos = self.np_random.uniform(
             low=-self.world_size / 2,
             high=self.world_size / 2,
             size=(2,)
         ).astype(np.float32)
 
-        # Make sure target is not too close to robot
         while self._distance(self.robot_pos, self.target_pos) < 2.0:
             self.target_pos = self.np_random.uniform(
                 low=-self.world_size / 2,
@@ -91,12 +91,7 @@ class RobotNavigationEnv(gym.Env):
                 size=(2,)
             ).astype(np.float32)
 
-        # Random obstacle position
-        self.obstacle_pos = self.np_random.uniform(
-            low=-self.world_size / 2,
-            high=self.world_size / 2,
-            size=(2,)
-        ).astype(np.float32)
+        self.obstacle_pos = self._sample_obstacle()
 
         return self._get_obs(), self._get_info()
 
@@ -105,9 +100,7 @@ class RobotNavigationEnv(gym.Env):
 
         previous_distance = self._distance(self.robot_pos, self.target_pos)
 
-        # Simple action dynamics
         if action == 0:
-            # Move forward
             direction = np.array([
                 np.cos(self.robot_angle),
                 np.sin(self.robot_angle)
@@ -115,22 +108,17 @@ class RobotNavigationEnv(gym.Env):
 
             self.robot_pos += self.max_speed * direction
 
-        elif action == 1:
-            # Turn left
+        elif action == 1: # LEFT
             self.robot_angle += self.turn_angle
 
-        elif action == 2:
-            # Turn right
+        elif action == 2: # RIGHT
             self.robot_angle -= self.turn_angle
 
         elif action == 3:
-            # Stop
             pass
 
-        # Normalize angle
         self.robot_angle = self._normalize_angle(self.robot_angle)
 
-        # Keep robot inside world
         self.robot_pos = np.clip(
             self.robot_pos,
             -self.world_size / 2,
@@ -139,27 +127,26 @@ class RobotNavigationEnv(gym.Env):
 
         current_distance = self._distance(self.robot_pos, self.target_pos)
 
-        # Basic reward
         reward = previous_distance - current_distance
         reward -= 0.01
 
-        reached_target = current_distance < self.target_radius
-        collision = self._check_collision()
+        self.reached_target = bool(current_distance < self.target_radius)
+        self.collision = bool(self._check_collision())
         timeout = self.current_step >= self.max_steps
 
-        if reached_target:
+        if self.reached_target:
             reward += 100.0
 
-        if collision:
+        if self.collision:
             reward -= 100.0
 
-        terminated = reached_target or collision
+        terminated = self.reached_target or self.collision
         truncated = timeout
 
         return self._get_obs(), reward, terminated, truncated, self._get_info()
 
     def render(self):
-        # Later we can add pygame visualization
+        # VISUALIZATION
         pass
 
     def _get_obs(self):
@@ -167,10 +154,8 @@ class RobotNavigationEnv(gym.Env):
 
         angle_to_target = self._angle_to_target()
 
-        # Very simple obstacle information
         obstacle_distance = self._distance(self.robot_pos, self.obstacle_pos)
 
-        # Placeholder sensor values
         front_obstacle = obstacle_distance
         left_obstacle = obstacle_distance
         right_obstacle = obstacle_distance
@@ -196,7 +181,9 @@ class RobotNavigationEnv(gym.Env):
             "target_pos": self.target_pos.copy(),
             "obstacle_pos": self.obstacle_pos.copy(),
             "distance_to_target": self._distance(self.robot_pos, self.target_pos),
-            "step": self.current_step
+            "step": self.current_step,
+            "reached_target": self.reached_target,
+            "collision": self.collision
         }
 
     def _distance(self, a, b):
@@ -214,6 +201,28 @@ class RobotNavigationEnv(gym.Env):
         while angle < -np.pi:
             angle += 2 * np.pi
         return angle
+
+
+    def _sample_obstacle(self):
+        min_robot_obstacle_distance = 1.0
+        min_target_obstacle_distance = 1.0
+
+        while True:
+            obstacle_pos = self.np_random.uniform(
+                low=-self.world_size / 2,
+                high=self.world_size / 2,
+                size=(2,)
+            ).astype(np.float32)
+
+            robot_obstacle_distance = self._distance(self.robot_pos, obstacle_pos)
+            target_obstacle_distance = self._distance(self.target_pos, obstacle_pos)
+
+            if (
+                robot_obstacle_distance > min_robot_obstacle_distance
+                and target_obstacle_distance > min_target_obstacle_distance
+            ):
+                return obstacle_pos
+        
 
     def _check_collision(self):
         distance_to_obstacle = self._distance(self.robot_pos, self.obstacle_pos)
