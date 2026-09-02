@@ -4,7 +4,8 @@ from pathlib import Path
 
 from stable_baselines3 import DQN
 
-from simulation.envs.robot_navigation_env import RobotNavigationEnv
+# from simulation.envs.robot_navigation_env import RobotNavigationEnv
+from simulation.envs.robot_navigation_env_v2 import RobotNavigationEnv
 
 
 MODEL_PATH = "experiments/checkpoints/dqn_mlp_baseline"

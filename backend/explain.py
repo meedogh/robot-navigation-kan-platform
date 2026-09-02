@@ -3,6 +3,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from simulation.envs.robot_navigation_env_v2 import RobotNavigationEnv
 from rl.policies.kan_network import KANQNetwork
 
 
@@ -29,7 +30,16 @@ def build_kan_explanation(model_path: Path):
       - per-input-feature importance (L1 norm of learned edge coefficients)
       - learned univariate function curves for the most important features
     """
-    model = KANQNetwork(obs_dim=10, action_dim=4, hidden_dim=32)
+    # Derive obs/action dims from the environment (same pattern as live_sim.py and
+    # evaluate_saved_models.py) so the network architecture always matches the
+    # checkpoint, which is trained against this precise env (v2 uses 6 actions).
+    env = RobotNavigationEnv()
+    model = KANQNetwork(
+        obs_dim=env.observation_space.shape[0],
+        action_dim=env.action_space.n,
+        hidden_dim=32,
+    )
+    env.close()
     state = torch.load(model_path, map_location=DEVICE)
     model.load_state_dict(state)
     model.to(DEVICE)

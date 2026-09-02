@@ -1,4 +1,5 @@
-from envs.robot_navigation_env import RobotNavigationEnv
+# from envs.robot_navigation_env import RobotNavigationEnv
+from simulation.envs.robot_navigation_env_v2 import RobotNavigationEnv
 
 
 def main():

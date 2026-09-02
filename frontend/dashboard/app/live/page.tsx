@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 const SIZE = 560;
-const WORLD = 10; // matches env world_size
+const WORLD = 20; // matches env v2 world_size; coords range [-WORLD/2, WORLD/2]
 
 function toCanvas(v: number) {
   return ((v + WORLD / 2) / WORLD) * SIZE;
@@ -16,7 +16,7 @@ export default function Live() {
   const [status, setStatus] = useState("idle");
   const [stats, setStats] = useState({ reward: 0, step: 0, action: "-", reached: false, collision: false });
 
-  const ACTION_NAMES = ["Forward", "Turn Left", "Turn Right", "Stop"];
+  const ACTION_NAMES = ["Forward", "Forward-Left", "Forward-Right", "Turn Left", "Turn Right", "Stop"];
 
   function draw(frame: any) {
     const canvas = canvasRef.current;
@@ -35,11 +35,14 @@ export default function Live() {
       ctx.beginPath(); ctx.moveTo(0, p); ctx.lineTo(SIZE, p); ctx.stroke();
     }
 
-    // obstacle
+    // obstacles (v2 env has multiple obstacles with different radii)
     ctx.fillStyle = "#ff5c7a";
-    ctx.beginPath();
-    ctx.arc(toCanvas(frame.obstacle_x), toCanvas(frame.obstacle_y), 18, 0, Math.PI * 2);
-    ctx.fill();
+    for (const ob of frame.obstacles ?? []) {
+      const r = Math.max(5, ob.radius * (SIZE / WORLD));
+      ctx.beginPath();
+      ctx.arc(toCanvas(ob.x), toCanvas(ob.y), r, 0, Math.PI * 2);
+      ctx.fill();
+    }
 
     // target
     ctx.fillStyle = "#38d39f";

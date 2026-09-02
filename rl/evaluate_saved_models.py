@@ -5,7 +5,8 @@ import numpy as np
 import pandas as pd
 import torch
 
-from simulation.envs.robot_navigation_env import RobotNavigationEnv
+# from simulation.envs.robot_navigation_env import RobotNavigationEnv
+from simulation.envs.robot_navigation_env_v2 import RobotNavigationEnv
 from rl.policies.mlp_network import MLPQNetwork
 from rl.policies.kan_network import KANQNetwork
 

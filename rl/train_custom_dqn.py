@@ -5,7 +5,8 @@ import numpy as np
 import pandas as pd
 import torch
 
-from simulation.envs.robot_navigation_env import RobotNavigationEnv
+# from simulation.envs.robot_navigation_env import RobotNavigationEnv
+from simulation.envs.robot_navigation_env_v2 import RobotNavigationEnv
 from rl.dqn.dqn_agent import DQNAgent
 
 

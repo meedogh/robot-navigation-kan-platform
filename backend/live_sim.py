@@ -3,7 +3,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from simulation.envs.robot_navigation_env import RobotNavigationEnv
+# from simulation.envs.robot_navigation_env import RobotNavigationEnv
+from simulation.envs.robot_navigation_env_v2 import RobotNavigationEnv
 from rl.policies.mlp_network import MLPQNetwork
 from rl.policies.kan_network import KANQNetwork
 
@@ -66,6 +67,16 @@ class LiveSimulator:
         self.episode_step += 1
         done = bool(terminated or truncated)
 
+        # V2 env stores multiple obstacles as a list of (position, radius).
+        obstacles = [
+            {
+                "x": float(pos[0]),
+                "y": float(pos[1]),
+                "radius": float(radius),
+            }
+            for pos, radius in self.env.obstacles
+        ]
+
         frame = {
             "model": self.model_type,
             "robot_x": float(self.env.robot_pos[0]),
@@ -73,8 +84,7 @@ class LiveSimulator:
             "robot_angle": float(self.env.robot_angle),
             "target_x": float(self.env.target_pos[0]),
             "target_y": float(self.env.target_pos[1]),
-            "obstacle_x": float(self.env.obstacle_pos[0]),
-            "obstacle_y": float(self.env.obstacle_pos[1]),
+            "obstacles": obstacles,
             "action": action,
             "reward": float(reward),
             "episode_reward": self.episode_reward,

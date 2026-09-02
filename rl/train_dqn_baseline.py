@@ -1,5 +1,6 @@
 from stable_baselines3 import DQN
-from simulation.envs.robot_navigation_env import RobotNavigationEnv
+# from simulation.envs.robot_navigation_env import RobotNavigationEnv
+from simulation.envs.robot_navigation_env_v2 import RobotNavigationEnv
 
 
 def main():

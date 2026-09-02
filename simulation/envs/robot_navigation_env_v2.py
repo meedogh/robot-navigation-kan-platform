@@ -6,7 +6,7 @@ import numpy as np
 from gymnasium import spaces
 
 
-class RobotNavigationEnvV2(gym.Env):
+class RobotNavigationEnv(gym.Env):
     """
     Robust robot navigation environment (V2).
 
@@ -260,7 +260,7 @@ class RobotNavigationEnvV2(gym.Env):
             reward -= current_distance * 0.5
 
         terminated = bool(self.reached_target or self.collision or self.stuck)
-        truncated = bool(self.current_step >= self.max_steps)
+        truncated = bool(self.current_step >= self.max_steps and not terminated)
 
         return self._get_obs(), reward, terminated, truncated, self._get_info()
 
@@ -422,9 +422,11 @@ class RobotNavigationEnvV2(gym.Env):
 
         max_distance = math.sqrt(2.0) * self.world_size
 
-        front_sensor = self._sector_distance(0.0, np.pi / 3.0)
-        left_sensor = self._sector_distance(np.pi / 2.0, np.pi / 3.0)
-        right_sensor = self._sector_distance(-np.pi / 2.0, np.pi / 3.0)
+        sector_width = 2.0 * np.pi / 3.0  # 120 degrees
+
+        front_sensor = self._sector_distance(0.0, sector_width)
+        left_sensor = self._sector_distance(2.0 * np.pi / 3.0, sector_width)
+        right_sensor = self._sector_distance(-2.0 * np.pi / 3.0, sector_width)
 
         obs = np.array(
             [
