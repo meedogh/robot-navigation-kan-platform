@@ -1,11 +1,11 @@
 import copy
+from typing import Any, Dict, Optional
 
 import numpy as np
 import torch
 
 from rl.dqn.replay_buffer import ReplayBuffer
-from rl.policies.mlp_network import MLPQNetwork
-from rl.policies.kan_network import KANQNetwork
+from rl.model_factory import create_qnetwork
 
 
 class DQNAgent:
@@ -22,37 +22,32 @@ class DQNAgent:
         epsilon_end: float = 0.05,
         epsilon_decay_steps: int = 50_000,
         target_update_interval: int = 500,
-        device: str = "cpu"
+        device: str = "cpu",
+        config: Optional[Dict[str, Any]] = None
     ):
+        cfg = config or {}
+
         self.obs_dim = obs_dim
         self.action_dim = action_dim
-        self.gamma = gamma
-        self.batch_size = batch_size
 
-        self.epsilon_start = epsilon_start
-        self.epsilon_end = epsilon_end
-        self.epsilon_decay_steps = epsilon_decay_steps
+        self.gamma = float(cfg.get("gamma", gamma))
+        self.batch_size = int(cfg.get("batch_size", batch_size))
+        self.learning_rate = float(cfg.get("learning_rate", lr))
 
-        self.target_update_interval = target_update_interval
+        self.epsilon_start = float(cfg.get("epsilon_start", epsilon_start))
+        self.epsilon_end = float(cfg.get("epsilon_end", epsilon_end))
+        self.epsilon_decay_steps = int(cfg.get("epsilon_decay_steps", epsilon_decay_steps))
+
+        self.target_update_interval = int(cfg.get("target_update_interval", target_update_interval))
 
         self.device = torch.device(device)
 
-        if network_type == "mlp":
-            self.policy = MLPQNetwork(
-                obs_dim=obs_dim,
-                action_dim=action_dim,
-                hidden_dim=64
-            )
-        elif network_type == "kan":
-            self.policy = KANQNetwork(
-                obs_dim=obs_dim,
-                action_dim=action_dim,
-                hidden_dim=32,
-                grid_size=12,
-                grid_range=2.0
-            )
-        else:
-            raise ValueError("network_type must be 'mlp' or 'kan'")
+        self.policy = create_qnetwork(
+            network_type,
+            obs_dim=obs_dim,
+            action_dim=action_dim,
+            config=cfg
+        )
 
         self.policy.to(self.device)
 
@@ -62,10 +57,10 @@ class DQNAgent:
 
         self.optimizer = torch.optim.Adam(
             self.policy.parameters(),
-            lr=lr
+            lr=self.learning_rate
         )
 
-        self.buffer = ReplayBuffer(capacity=buffer_size)
+        self.buffer = ReplayBuffer(capacity=int(cfg.get("buffer_size", buffer_size)))
 
         self.timesteps = 0
         self.update_count = 0

@@ -5,8 +5,7 @@ import torch
 
 # from simulation.envs.robot_navigation_env import RobotNavigationEnv
 from simulation.envs.robot_navigation_env_v2 import RobotNavigationEnv
-from rl.policies.mlp_network import MLPQNetwork
-from rl.policies.kan_network import KANQNetwork
+from rl.model_factory import create_qnetwork_from_arch, load_arch
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -15,11 +14,8 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def _create_model(model_type: str, obs_dim: int, action_dim: int):
-    if model_type == "mlp":
-        return MLPQNetwork(obs_dim=obs_dim, action_dim=action_dim, hidden_dim=64)
-    if model_type == "kan":
-        return KANQNetwork(obs_dim=obs_dim, action_dim=action_dim, hidden_dim=32)
-    raise ValueError("model_type must be 'mlp' or 'kan'")
+    arch = load_arch(CHECKPOINT_DIR, model_type)
+    return create_qnetwork_from_arch(model_type, obs_dim, action_dim, arch)
 
 
 class LiveSimulator:
@@ -79,6 +75,7 @@ class LiveSimulator:
 
         frame = {
             "model": self.model_type,
+            "world_size": float(getattr(self.env, "world_size", 20.0)),
             "robot_x": float(self.env.robot_pos[0]),
             "robot_y": float(self.env.robot_pos[1]),
             "robot_angle": float(self.env.robot_angle),

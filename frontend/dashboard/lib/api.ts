@@ -6,3 +6,8 @@ export async function getJSON<T>(path: string): Promise<T> {
   const { data } = await axios.get<T>(`${API_BASE_URL}${path}`);
   return data;
 }
+
+export async function postJSON<T>(path: string, body?: unknown): Promise<T> {
+  const { data } = await axios.post<T>(`${API_BASE_URL}${path}`, body ?? {});
+  return data;
+}

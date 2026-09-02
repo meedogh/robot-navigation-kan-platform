@@ -17,11 +17,12 @@ A **FastAPI** backend serves training results, a KAN explainability endpoint, an
 ├── rl/                          # RL code
 │   ├── dqn/                     # custom DQN agent + replay buffer
 │   ├── policies/                # MLP & KAN Q-networks (+ KAN layer implementation)
-│   ├── train_custom_dqn.py      # ★ main training entry point (MLP or KAN)
+│   ├── train_custom_dqn.py      # ★ main training entry point (MLP or KAN) - config-driven, cancellable
 │   ├── train_dqn_baseline.py    # stable-baselines3 DQN baseline
 │   ├── evaluate_agent.py        # evaluate the SB3 baseline
 │   ├── evaluate_saved_models.py # evaluate all saved custom checkpoints
-│   └── compare_agents.py        # plot MLP vs KAN comparison
+│   ├── compare_agents.py        # plot MLP vs KAN comparison
+│   └── model_factory.py         # central Q-network factory (keeps architectures consistent)
 ├── backend/                     # FastAPI app (results API, KAN explainer, live WS sim)
 ├── frontend/dashboard/          # Next.js dashboard (Overview / Training / Live / Explain)
 └── experiments/
@@ -109,6 +110,15 @@ Health check: <http://127.0.0.1:8000/> · Interactive docs: <http://127.0.0.1:80
 | `GET /api/results/final` | final saved-model evaluation table |
 | `GET /api/comparison/summary` | best-model summary |
 | `GET /api/results/comparison-image` | MLP vs KAN comparison plot |
+| `GET /api/training/config` | default tuning knobs + preset runs |
+| `GET /api/training/last-config/{mlp\|kan}` | config of the most recent run |
+| `POST /api/training/start` | start a background training job `{"config": {...}}` |
+| `GET /api/training/status` | current job status + live/training busy flag |
+| `GET /api/training/progress` | evaluation rows collected so far |
+| `POST /api/training/stop` | request a clean early stop of the running job |
+| `POST /api/evaluate/start` | evaluate all saved checkpoints `{"episodes": 100}` |
+| `GET /api/evaluate/status` | evaluation job status |
+| `GET /api/checkpoints` | files in `experiments/checkpoints/` |
 | `GET /api/explain/kan` | KAN feature importance + learned curves *(requires a KAN checkpoint)* |
 | `WS /ws/live` | live episode streaming — client sends `{"model": "kan" \| "mlp"}` *(requires a checkpoint)* |
 
@@ -128,6 +138,8 @@ Open <http://localhost:3000>. Pages:
 | `/training` | Reward / success / collision curves for MLP vs KAN |
 | `/live` | Real-time agent simulation over WebSocket |
 | `/explain` | KAN explainability — feature importance & learned functions |
+| `/setup` | Setup and Train — tweak training/evaluation parameters and start a run |
+| `/results` | Results — live training progress, saved checkpoints, final evaluation + run evaluation |
 
 Production build:
 

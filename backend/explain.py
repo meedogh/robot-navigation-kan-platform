@@ -4,7 +4,7 @@ import numpy as np
 import torch
 
 from simulation.envs.robot_navigation_env_v2 import RobotNavigationEnv
-from rl.policies.kan_network import KANQNetwork
+from rl.model_factory import create_qnetwork_from_arch, load_arch
 
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -34,10 +34,12 @@ def build_kan_explanation(model_path: Path):
     # evaluate_saved_models.py) so the network architecture always matches the
     # checkpoint, which is trained against this precise env (v2 uses 6 actions).
     env = RobotNavigationEnv()
-    model = KANQNetwork(
+    arch = load_arch(Path(model_path).parent, "kan")
+    model = create_qnetwork_from_arch(
+        "kan",
         obs_dim=env.observation_space.shape[0],
         action_dim=env.action_space.n,
-        hidden_dim=32,
+        arch=arch
     )
     env.close()
     state = torch.load(model_path, map_location=DEVICE)

@@ -1,16 +1,120 @@
 import argparse
+import json
+import threading
+import time
 from pathlib import Path
+from typing import Any, Callable, Dict, Optional
 
 import numpy as np
 import pandas as pd
 import torch
 
-# from simulation.envs.robot_navigation_env import RobotNavigationEnv
 from simulation.envs.robot_navigation_env_v2 import RobotNavigationEnv
 from rl.dqn.dqn_agent import DQNAgent
+from rl.frames import build_frame
+from rl.model_factory import save_arch
 
 
-def evaluate_agent(agent, env, episodes: int = 20, seed_base=None):
+DEFAULT_TRAINING_CONFIG: Dict[str, Any] = {
+    # run
+    "model_type": "mlp",
+    "total_steps": 100_000,
+    "seed": 42,
+    "eval_every": 5_000,
+    "eval_episodes": 20,
+    "eval_seed_base": None,
+
+    # DQN agent hyperparameters
+    "learning_rate": 0.0005,
+    "gamma": 0.99,
+    "buffer_size": 50_000,
+    "batch_size": 64,
+    "epsilon_start": 1.0,
+    "epsilon_end": 0.05,
+    "epsilon_decay_steps": 50_000,
+    "target_update_interval": 500,
+
+    # network architecture
+    "mlp_hidden_dim": 64,
+    "kan_hidden_dim": 32,
+    "kan_grid_size": 12,
+    "kan_grid_range": 2.0,
+
+    # environment
+    "env_world_size": 20.0,
+    "env_max_steps": 300,
+    "env_frame_skip": 3,
+    "env_min_obstacles": 3,
+    "env_max_obstacles": 6,
+    "env_sensor_range": 12.0,
+}
+
+_INT_KEYS = {
+    "total_steps", "seed", "eval_every", "eval_episodes",
+    "buffer_size", "batch_size", "epsilon_decay_steps", "target_update_interval",
+    "mlp_hidden_dim", "kan_hidden_dim", "kan_grid_size",
+    "env_max_steps", "env_frame_skip", "env_min_obstacles", "env_max_obstacles",
+}
+
+_FLOAT_KEYS = {
+    "learning_rate", "gamma",
+    "epsilon_start", "epsilon_end", "kan_grid_range",
+    "env_world_size", "env_sensor_range",
+}
+
+
+def validate_training_config(raw: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Merge user config with defaults and coerce / validate the values."""
+    config = {**DEFAULT_TRAINING_CONFIG, **(raw or {})}
+
+    if config["model_type"] not in ("mlp", "kan"):
+        raise ValueError(
+            f"model_type must be 'mlp' or 'kan', got {config['model_type']!r}"
+        )
+
+    for key in _INT_KEYS:
+        config[key] = int(config[key])
+    for key in _FLOAT_KEYS:
+        config[key] = float(config[key])
+
+    if config["eval_seed_base"] is not None:
+        config["eval_seed_base"] = int(config["eval_seed_base"])
+
+    if config["total_steps"] < 1:
+        raise ValueError("total_steps must be >= 1")
+    if config["eval_every"] < 1:
+        raise ValueError("eval_every must be >= 1")
+    if config["eval_episodes"] < 1:
+        raise ValueError("eval_episodes must be >= 1")
+    if config["batch_size"] < 1:
+        raise ValueError("batch_size must be >= 1")
+    if config["buffer_size"] < config["batch_size"]:
+        raise ValueError("buffer_size must be >= batch_size")
+    if not (0.0 <= config["epsilon_start"] <= 1.0):
+        raise ValueError("epsilon_start must be in [0, 1]")
+    if not (0.0 <= config["epsilon_end"] <= 1.0):
+        raise ValueError("epsilon_end must be in [0, 1]")
+    if config["learning_rate"] <= 0.0:
+        raise ValueError("learning_rate must be > 0")
+    if not (0.0 < config["gamma"] < 1.0):
+        raise ValueError("gamma must be in (0, 1)")
+    if config["env_max_obstacles"] < config["env_min_obstacles"]:
+        raise ValueError("env_max_obstacles must be >= env_min_obstacles")
+    if config["env_world_size"] <= 2.0:
+        raise ValueError("env_world_size must be > 2.0")
+
+    return config
+
+
+def evaluate_agent(
+    agent,
+    env,
+    episodes: int = 20,
+    seed_base=None,
+    frame_callback=None,
+    model_type: str = "unknown",
+    phase: str = "evaluation"
+):
     rewards = []
     successes = []
     collisions = []
@@ -37,6 +141,22 @@ def evaluate_agent(agent, env, episodes: int = 20, seed_base=None):
 
             done = terminated or truncated
 
+            if frame_callback is not None:
+                frame_callback(
+                    build_frame(
+                        env=env,
+                        model_type=model_type,
+                        action=action,
+                        reward=float(reward),
+                        episode_reward=episode_reward,
+                        step=episode_steps,
+                        info=info,
+                        done=done,
+                        phase=phase,
+                        source=phase,
+                    )
+                )
+
         rewards.append(episode_reward)
         successes.append(bool(info.get("reached_target", False)))
         collisions.append(bool(info.get("collision", False)))
@@ -54,28 +174,77 @@ def evaluate_agent(agent, env, episodes: int = 20, seed_base=None):
 
     return metrics
 
+
 def train(
     model_type: str = "mlp",
     total_steps: int = 100_000,
     seed: int = 42,
     eval_every: int = 5_000,
-    eval_episodes: int = 20
+    eval_episodes: int = 20,
+    eval_seed_base: Optional[int] = None,
+    checkpoint_dir: Optional[Path] = None,
+    results_dir: Optional[Path] = None,
+    cancel_event: Optional[threading.Event] = None,
+    config: Optional[Dict[str, Any]] = None,
+    progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    frame_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    status_callback: Optional[Callable[[Dict[str, Any]], None]] = None
 ):
+    """Train a DQN agent.
+
+    All tuning knobs live in `config` (merged over the legacy keyword args).
+    Callers may pass an absolute `checkpoint_dir` / `results_dir`, a
+    `cancel_event` (threading.Event) to request a clean early stop, a
+    `progress_callback` invoked with each evaluation row, and optionally a
+    `frame_callback` for live visualization (throttle a ~30 fps there) and a
+    `status_callback` invoked once per training step for smooth progress bars.
+    """
+    overrides = {
+        "model_type": model_type,
+        "total_steps": total_steps,
+        "seed": seed,
+        "eval_every": eval_every,
+        "eval_episodes": eval_episodes,
+        "eval_seed_base": eval_seed_base,
+    }
+    # eval_seed_base=None means "auto", but keep an explicit user override.
+    if eval_seed_base is None:
+        if config is not None and config.get("eval_seed_base") is not None:
+            overrides["eval_seed_base"] = config["eval_seed_base"]
+
+    config = validate_training_config({**overrides, **(config or {})})
+
+    model_type = config["model_type"]
+    total_steps = config["total_steps"]
+    seed = config["seed"]
+    eval_every = config["eval_every"]
+    eval_episodes = config["eval_episodes"]
+    eval_seed_base = config["eval_seed_base"] or (seed + 100_000)
+
     torch.manual_seed(seed)
     np.random.seed(seed)
 
+    stopped = False
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    env = RobotNavigationEnv()
-    eval_env = RobotNavigationEnv()
-    
-    checkpoint_dir = Path("experiments/checkpoints")
+    env_kwargs = {
+        "world_size": config["env_world_size"],
+        "max_steps": config["env_max_steps"],
+        "frame_skip": config["env_frame_skip"],
+        "min_obstacles": config["env_min_obstacles"],
+        "max_obstacles": config["env_max_obstacles"],
+        "sensor_range": config["env_sensor_range"],
+    }
+
+    env = RobotNavigationEnv(**env_kwargs)
+    eval_env = RobotNavigationEnv(**env_kwargs)
+
+    checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else Path("experiments/checkpoints")
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    results_dir = Path("experiments/results")
+    results_dir = Path(results_dir) if results_dir else Path("experiments/results")
     results_dir.mkdir(parents=True, exist_ok=True)
-
-    eval_seed_base = seed + 100_000
 
     best_success = -1.0
     best_reward = -1e9
@@ -88,19 +257,53 @@ def train(
         obs_dim=obs_dim,
         action_dim=action_dim,
         network_type=model_type,
-        device=device
+        device=device,
+        config=config
     )
 
     obs, _ = env.reset(seed=seed)
 
     logs = []
+    last_frame_time = 0.0
+    live_episode_reward = 0.0
+    live_episode_steps = 0
 
     print(f"Training {model_type.upper()} agent on device: {device}")
 
     for step in range(1, total_steps + 1):
+        if cancel_event is not None and cancel_event.is_set():
+            print("Training stopped by user request.")
+            stopped = True
+            break
+
         action = agent.select_action(obs, training=True)
 
         next_obs, reward, terminated, truncated, info = env.step(action)
+
+        done_step = bool(terminated or truncated)
+
+        live_episode_reward += float(reward)
+        live_episode_steps += 1
+
+        if frame_callback is not None:
+            now = time.monotonic()
+            if now - last_frame_time >= 1.0 / 30.0:
+                last_frame_time = now
+                frame_callback(
+                    build_frame(
+                        env=env,
+                        model_type=model_type,
+                        action=action,
+                        reward=float(reward),
+                        episode_reward=live_episode_reward,
+                        step=live_episode_steps,
+                        info=info,
+                        done=done_step,
+                        phase="training",
+                        source="training",
+                        training_step=step,
+                    )
+                )
 
         done_for_buffer = bool(terminated)
 
@@ -116,15 +319,27 @@ def train(
 
         if terminated or truncated:
             obs, _ = env.reset()
+            live_episode_reward = 0.0
+            live_episode_steps = 0
 
-        loss = agent.update()
+        agent.update()
+
+        if status_callback is not None:
+            status_callback({
+                "training_step": step,
+                "total_steps": total_steps,
+                "phase": "training",
+            })
 
         if step % eval_every == 0:
             metrics = evaluate_agent(
                 agent,
                 eval_env,
                 episodes=eval_episodes,
-                seed_base=eval_seed_base
+                seed_base=eval_seed_base,
+                frame_callback=frame_callback,
+                model_type=model_type,
+                phase="evaluation",
             )
 
             row = {
@@ -135,6 +350,9 @@ def train(
 
             logs.append(row)
 
+            if progress_callback is not None:
+                progress_callback(dict(row))
+
             print(
                 f"[{model_type.upper()}] Step {step} | "
                 f"Reward: {metrics['mean_reward']:.2f} | "
@@ -142,6 +360,7 @@ def train(
                 f"Collision: {metrics['collision_rate'] * 100:.2f}% | "
                 f"Steps: {metrics['mean_steps']:.2f}"
             )
+
             is_better = (
                 metrics["success_rate"] > best_success
                 or (
@@ -165,39 +384,60 @@ def train(
                     f"Reward: {best_reward:.2f}"
                 )
 
-    final_metrics = evaluate_agent(
-        agent,
-        eval_env,
-        episodes=eval_episodes,
-        seed_base=eval_seed_base
-    )
+    if not stopped:
+        final_metrics = evaluate_agent(
+            agent,
+            eval_env,
+            episodes=eval_episodes,
+            seed_base=eval_seed_base,
+            frame_callback=frame_callback,
+            model_type=model_type,
+            phase="evaluation",
+        )
 
-    final_row = {
-        "model_type": model_type,
-        "training_step": total_steps,
-        **final_metrics
-    }
+        final_row = {
+            "model_type": model_type,
+            "training_step": total_steps,
+            **final_metrics
+        }
 
-    logs.append(final_row)
+        logs.append(final_row)
 
-    print("\n===== Final Evaluation =====")
-    print(final_row)
+        if progress_callback is not None:
+            progress_callback(dict(final_row))
 
-    checkpoint_dir = Path("experiments/checkpoints")
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        print("\n===== Final Evaluation =====")
+        print(final_row)
+
+    # Persist the exact architecture so evaluation / live sim / explain loaders
+    # can reconstruct the network even when custom architecture was used.
+    save_arch(checkpoint_dir, model_type, config)
 
     model_path = checkpoint_dir / f"custom_dqn_{model_type}.pt"
     torch.save(agent.policy.state_dict(), model_path)
 
-    results_dir = Path("experiments/results")
-    results_dir.mkdir(parents=True, exist_ok=True)
+    config_path = results_dir / f"custom_dqn_{model_type}_config.json"
+    config_path.write_text(json.dumps(config, indent=2) + "\n")
 
-    df = pd.DataFrame(logs)
-    csv_path = results_dir / f"custom_dqn_{model_type}_train_log.csv"
-    df.to_csv(csv_path, index=False)
+    if logs:
+        df = pd.DataFrame(logs)
+        csv_path = results_dir / f"custom_dqn_{model_type}_train_log.csv"
+        df.to_csv(csv_path, index=False)
+    else:
+        csv_path = None
 
     print(f"Model saved to: {model_path}")
-    print(f"Training log saved to: {csv_path}")
+    if csv_path:
+        print(f"Training log saved to: {csv_path}")
+
+    return {
+        "status": "stopped" if stopped else "completed",
+        "model_type": model_type,
+        "model_path": str(model_path),
+        "log_path": str(csv_path) if csv_path else None,
+        "config_path": str(config_path),
+        "rows_logged": len(logs),
+    }
 
 
 if __name__ == "__main__":
