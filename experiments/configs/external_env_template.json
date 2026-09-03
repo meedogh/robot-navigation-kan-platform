@@ -1,0 +1,89 @@
+{
+  "format": "robotnav-run-config",
+  "schema_version": 1,
+  "name": "external-env-template",
+  "description": "TEMPLATE: replace environment.module with your own Gymnasium environment class (Unity ML-Agents, Gazebo/ROS, or any Python module). The class must implement reset()/step()/observation_space/action_space and match the observation layout and action semantics in environment.spec - then training, evaluation and the live dashboard run against it unchanged. See the 'External simulators' section of the README.",
+  "created_at": "2026-09-04T00:00:00+00:00",
+  "training": {
+    "model_type": "mlp",
+    "total_steps": 100000,
+    "seed": 42,
+    "eval_every": 5000,
+    "eval_episodes": 20,
+    "eval_seed_base": null,
+    "learning_rate": 0.0005,
+    "gamma": 0.99,
+    "buffer_size": 50000,
+    "batch_size": 64,
+    "epsilon_start": 1.0,
+    "epsilon_end": 0.05,
+    "epsilon_decay_steps": 50000,
+    "target_update_interval": 500,
+    "mlp_hidden_dim": 64,
+    "kan_hidden_dim": 32,
+    "kan_grid_size": 12,
+    "kan_grid_range": 2.0
+  },
+  "environment": {
+    "source": "module",
+    "variant": null,
+    "module": "my_adapters.unity_env:UnityNavEnv",
+    "params": {
+      "world_size": 20.0,
+      "max_steps": 300,
+      "sensor_range": 12.0,
+      "robot_radius": 0.35,
+      "target_radius": 0.8,
+      "max_speed": 0.35,
+      "turn_angle_deg": 30.0
+    },
+    "spec": {
+      "observation": {
+        "type": "box",
+        "shape": [10],
+        "low": -1.0,
+        "high": 1.0,
+        "features": [
+          "robot_x",
+          "robot_y",
+          "robot_angle",
+          "target_x",
+          "target_y",
+          "distance_to_target",
+          "angle_to_target",
+          "front_sensor",
+          "left_sensor",
+          "right_sensor"
+        ]
+      },
+      "action": {
+        "type": "discrete",
+        "n": 6,
+        "labels": [
+          "forward",
+          "forward_left",
+          "forward_right",
+          "turn_left",
+          "turn_right",
+          "stop"
+        ]
+      },
+      "episode_end": ["target_reached", "collision", "stuck", "max_steps"],
+      "info_keys": [
+        "distance_to_target",
+        "step",
+        "reached_target",
+        "collision",
+        "stuck",
+        "energy_used"
+      ],
+      "visualization_attrs": [
+        "world_size",
+        "robot_pos",
+        "robot_angle",
+        "target_pos",
+        "obstacles"
+      ]
+    }
+  }
+}

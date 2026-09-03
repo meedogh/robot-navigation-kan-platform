@@ -9,7 +9,8 @@ import numpy as np
 import pandas as pd
 import torch
 
-from simulation.envs.robot_navigation_env_v2 import RobotNavigationEnv
+from simulation.env_factory import create_env
+from simulation.envs.robot_navigation_env_v2 import RobotNavigationEnv  # noqa: F401 (kept for backwards compatibility)
 from rl.dqn.dqn_agent import DQNAgent
 from rl.frames import build_frame
 from rl.model_factory import save_arch
@@ -47,6 +48,16 @@ DEFAULT_TRAINING_CONFIG: Dict[str, Any] = {
     "env_min_obstacles": 3,
     "env_max_obstacles": 6,
     "env_sensor_range": 12.0,
+    "env_robot_radius": 0.35,
+    "env_target_radius": 0.8,
+    "env_max_speed": 0.35,
+    "env_turn_angle_deg": 30.0,
+
+    # environment source: the builtin registry, or any external Gymnasium
+    # environment class (Unity ML-Agents, Gazebo/ROS bridge, custom module).
+    "env_source": "builtin",
+    "env_variant": "v2",
+    "env_module": None,
 }
 
 _INT_KEYS = {
@@ -60,6 +71,7 @@ _FLOAT_KEYS = {
     "learning_rate", "gamma",
     "epsilon_start", "epsilon_end", "kan_grid_range",
     "env_world_size", "env_sensor_range",
+    "env_robot_radius", "env_target_radius", "env_max_speed", "env_turn_angle_deg",
 }
 
 
@@ -235,10 +247,21 @@ def train(
         "min_obstacles": config["env_min_obstacles"],
         "max_obstacles": config["env_max_obstacles"],
         "sensor_range": config["env_sensor_range"],
+        "robot_radius": config["env_robot_radius"],
+        "target_radius": config["env_target_radius"],
+        "max_speed": config["env_max_speed"],
+        "turn_angle_deg": config["env_turn_angle_deg"],
     }
 
-    env = RobotNavigationEnv(**env_kwargs)
-    eval_env = RobotNavigationEnv(**env_kwargs)
+    # env_source = "builtin" -> RobotNavigationEnv (v2) with env_kwargs;
+    # env_source = "module"  -> any external Gymnasium environment class,
+    # e.g. a Unity ML-Agents or Gazebo/ROS adapter (see rl/config_io.py).
+    if config.get("env_source", "builtin") == "builtin":
+        env = RobotNavigationEnv(**env_kwargs)
+        eval_env = RobotNavigationEnv(**env_kwargs)
+    else:
+        env = create_env(config)
+        eval_env = create_env(config)
 
     checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else Path("experiments/checkpoints")
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -441,45 +464,110 @@ def train(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="Train a DQN agent (MLP or KAN). Supports portable run "
+        "config files (see rl/config_io.py)."
+    )
+
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to a portable run config JSON (exported via "
+        "python -m rl.config_io export or the dashboard). CLI flags below "
+        "override values from the file when given."
+    )
+
+    parser.add_argument(
+        "--export-config",
+        type=str,
+        default=None,
+        help="Resolve the effective training config to this JSON file, then "
+        "exit without training."
+    )
 
     parser.add_argument(
         "--model",
         type=str,
-        default="mlp",
+        default=None,
         choices=["mlp", "kan"]
     )
 
     parser.add_argument(
         "--total-steps",
         type=int,
-        default=100_000
+        default=None
     )
 
     parser.add_argument(
         "--seed",
         type=int,
-        default=42
+        default=None
     )
 
     parser.add_argument(
         "--eval-every",
         type=int,
-        default=5_000
+        default=None
     )
 
     parser.add_argument(
         "--eval-episodes",
         type=int,
-        default=20
+        default=None
     )
 
     args = parser.parse_args()
 
+    # 1) Start from the run config file (if any), 2) apply explicitly given
+    #    CLI flags on top, 3) let validate_training_config fill the defaults.
+    config: Dict[str, Any] = {}
+    if args.config is not None:
+        from rl.config_io import load_run_config_flat
+
+        config = load_run_config_flat(args.config)
+        print(
+            f"Loaded run config: {args.config} "
+            f"(environment source: {config.get('env_source', 'builtin')!r}"
+            + (
+                f", module: {config.get('env_module')!r}"
+                if config.get("env_source") == "module"
+                else ""
+            )
+            + ")"
+        )
+
+    cli_overrides: Dict[str, Any] = {}
+    if args.model is not None:
+        cli_overrides["model_type"] = args.model
+    if args.total_steps is not None:
+        cli_overrides["total_steps"] = args.total_steps
+    if args.seed is not None:
+        cli_overrides["seed"] = args.seed
+    if args.eval_every is not None:
+        cli_overrides["eval_every"] = args.eval_every
+    if args.eval_episodes is not None:
+        cli_overrides["eval_episodes"] = args.eval_episodes
+    config = {**config, **cli_overrides}
+
+    if args.export_config is not None:
+        from rl.config_io import export_run_config
+
+        run = export_run_config(
+            args.export_config,
+            config=config,
+            description="Exported via python -m rl.train_custom_dqn --export-config",
+        )
+        print(f"Run config written to: {args.export_config}")
+        print(f"  environment source: {run['environment']['source']!r}")
+        raise SystemExit(0)
+
     train(
-        model_type=args.model,
-        total_steps=args.total_steps,
-        seed=args.seed,
-        eval_every=args.eval_every,
-        eval_episodes=args.eval_episodes
+        model_type=config.get("model_type", "mlp"),
+        total_steps=config.get("total_steps", 100_000),
+        seed=config.get("seed", 42),
+        eval_every=config.get("eval_every", 5_000),
+        eval_episodes=config.get("eval_episodes", 20),
+        eval_seed_base=config.get("eval_seed_base"),
+        config=config,
     )

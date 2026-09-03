@@ -32,6 +32,10 @@ class RobotNavigationEnv(gym.Env):
         min_obstacles: int = 3,
         max_obstacles: int = 6,
         sensor_range: float = 12.0,
+        robot_radius: float = 0.35,
+        target_radius: float = 0.8,
+        max_speed: float = 0.35,
+        turn_angle_deg: float = 30.0,
     ):
         super().__init__()
 
@@ -45,11 +49,13 @@ class RobotNavigationEnv(gym.Env):
         self.max_obstacles = max_obstacles
         self.sensor_range = sensor_range
 
-        self.robot_radius = 0.35
-        self.target_radius = 0.8
-
-        self.max_speed = 0.35
-        self.turn_angle = np.pi / 6.0  # 30 degrees
+        # Physics constants (previously hardcoded; now configurable so a run
+        # config can fully describe the environment, e.g. for re-implementing
+        # it in Unity / Gazebo).
+        self.robot_radius = float(robot_radius)
+        self.target_radius = float(target_radius)
+        self.max_speed = float(max_speed)
+        self.turn_angle = math.radians(float(turn_angle_deg))
 
         # 0 forward
         # 1 forward-left

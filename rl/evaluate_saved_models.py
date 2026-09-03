@@ -6,7 +6,8 @@ import numpy as np
 import pandas as pd
 import torch
 
-from simulation.envs.robot_navigation_env_v2 import RobotNavigationEnv
+from simulation.env_factory import create_env
+from rl.config_io import env_config_from_checkpoint_dir
 from rl.frames import build_frame
 from rl.model_factory import create_qnetwork_from_arch, load_arch
 
@@ -56,8 +57,12 @@ def evaluate_model(
     on_episode=None,
     model_type: str = "unknown",
     model_name: Optional[str] = None,
+    env_config: Optional[Dict[str, Any]] = None,
 ):
-    env = RobotNavigationEnv()
+    # env_config comes from the config JSON saved next to the checkpoint, so
+    # the model is evaluated in the exact environment it was trained in
+    # (builtin or an external Unity / Gazebo / custom module environment).
+    env = create_env(env_config)
 
     rewards = []
     successes = []
@@ -147,11 +152,6 @@ def main(
     results_dir = Path(results_dir) if results_dir else RESULTS_DIR
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    dummy_env = RobotNavigationEnv()
-    obs_dim = dummy_env.observation_space.shape[0]
-    action_dim = dummy_env.action_space.n
-    dummy_env.close()
-
     candidate_models = [
         ("mlp_final", "mlp", "custom_dqn_mlp.pt"),
         ("kan_final", "kan", "custom_dqn_kan.pt"),
@@ -179,6 +179,14 @@ def main(
     for name, model_type, filename in found:
         model_path = checkpoint_dir / filename
 
+        # Each model may have been trained in a different environment (custom
+        # world size or an external simulator) - resolve it per checkpoint.
+        env_config = env_config_from_checkpoint_dir(checkpoint_dir, model_type)
+        probe_env = create_env(env_config)
+        obs_dim = probe_env.observation_space.shape[0]
+        action_dim = probe_env.action_space.n
+        probe_env.close()
+
         print(f"Evaluating {name} ...")
 
         arch = load_arch(checkpoint_dir, model_type)
@@ -200,6 +208,7 @@ def main(
             on_episode=_on_episode,
             model_type=model_type,
             model_name=name,
+            env_config=env_config,
         )
 
         row = {

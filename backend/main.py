@@ -1,16 +1,20 @@
 import asyncio
+import json
+import re
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import torch
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from backend.live_sim import LiveSimulator
 from backend.explain import build_kan_explanation
 from backend import training
+from rl import config_io
+from simulation import env_factory
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -133,6 +137,92 @@ def start_training_job(payload: dict):
         return training.start_training(payload)
     except training.JobError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+
+
+def _run_config_response(run: dict, filename: str) -> Response:
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", filename).strip("_") or "run"
+    return Response(
+        content=json.dumps(run, indent=2) + "\n",
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_name}.json"'
+        },
+    )
+
+
+@app.post("/api/config/export")
+def export_run_config(payload: dict):
+    """Turn a flat training config (e.g. from the Setup page form) into a
+    portable run-config JSON file describing training params + environment."""
+    config = payload.get("config") or {}
+    if not isinstance(config, dict):
+        raise HTTPException(status_code=400, detail="config must be a JSON object")
+
+    name = str(payload.get("name") or "robotnav-run")
+    description = str(payload.get("description") or "")
+
+    try:
+        run = config_io.run_config_from_flat(config, name=name, description=description)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid config: {exc}")
+
+    return _run_config_response(run, name)
+
+
+@app.post("/api/config/import")
+def import_run_config(payload: dict):
+    """Validate an uploaded run config JSON and return the flattened training
+    config (ready for the Setup page form or /api/training/start)."""
+    try:
+        flat = config_io.flat_config_from_run(payload)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    warnings = []
+    environment = payload.get("environment") or {}
+    if (environment.get("source") or "builtin") == "module":
+        module_path = environment.get("module")
+        try:
+            env_factory.resolve_env_class("module", None, module_path)
+        except Exception as exc:
+            warnings.append(
+                f"The external environment '{module_path}' could not be loaded "
+                f"on this machine: {exc}"
+            )
+        else:
+            warnings.append(
+                f"External environment '{module_path}' will be used for "
+                "training, evaluation and live simulation on this backend."
+            )
+
+    return {
+        "ok": True,
+        "name": payload.get("name") or "unnamed-run",
+        "config": flat,
+        "warnings": warnings,
+    }
+
+
+@app.get("/api/config/export/{model_type}")
+def export_last_run_config(model_type: str):
+    """Download the config of the most recent run of a model as a portable
+    run-config JSON file."""
+    flat = training.last_run_config(model_type)
+    if flat is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No previous run config for this model ({model_type})",
+        )
+    try:
+        run = config_io.run_config_from_flat(
+            flat,
+            name=f"last-run-{model_type}",
+            description="Config of the most recent training run, exported from the backend",
+        )
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid saved config: {exc}")
+
+    return _run_config_response(run, f"robotnav-last-run-{model_type}")
 
 
 @app.get("/api/training/status")

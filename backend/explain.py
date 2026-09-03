@@ -3,7 +3,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from simulation.envs.robot_navigation_env_v2 import RobotNavigationEnv
+from simulation.env_factory import create_env
+from rl.config_io import env_config_from_checkpoint_dir
 from rl.model_factory import create_qnetwork_from_arch, load_arch
 
 
@@ -30,18 +31,22 @@ def build_kan_explanation(model_path: Path):
       - per-input-feature importance (L1 norm of learned edge coefficients)
       - learned univariate function curves for the most important features
     """
-    # Derive obs/action dims from the environment (same pattern as live_sim.py and
-    # evaluate_saved_models.py) so the network architecture always matches the
-    # checkpoint, which is trained against this precise env (v2 uses 6 actions).
-    env = RobotNavigationEnv()
+    # Derive obs/action dims from the environment the checkpoint was trained in
+    # (recorded in custom_dqn_kan_config.json; falls back to the builtin env)
+    # so the network architecture always matches the checkpoint - including
+    # when training ran against an external Unity / Gazebo / custom env.
+    env_config = env_config_from_checkpoint_dir(Path(model_path).parent, "kan")
+    env = create_env(env_config)
+    obs_dim = env.observation_space.shape[0]
+    action_dim = env.action_space.n
+    env.close()
     arch = load_arch(Path(model_path).parent, "kan")
     model = create_qnetwork_from_arch(
         "kan",
-        obs_dim=env.observation_space.shape[0],
-        action_dim=env.action_space.n,
+        obs_dim=obs_dim,
+        action_dim=action_dim,
         arch=arch
     )
-    env.close()
     state = torch.load(model_path, map_location=DEVICE)
     model.load_state_dict(state)
     model.to(DEVICE)
@@ -65,7 +70,7 @@ def build_kan_explanation(model_path: Path):
             # basis values for a sweep of x on this single feature
             x_tensor = torch.tensor(xs, dtype=torch.float32).unsqueeze(1).to(DEVICE)
             # Build a zero input batch, vary only feature idx
-            batch = torch.zeros(len(xs), 10, device=DEVICE)
+            batch = torch.zeros(len(xs), obs_dim, device=DEVICE)
             batch[:, idx] = torch.tensor(xs, dtype=torch.float32).to(DEVICE)
             out = kan_input(batch)  # (samples, hidden)
             # Sum across hidden units to get overall influence of this feature

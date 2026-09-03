@@ -1,10 +1,11 @@
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 import numpy as np
 import torch
 
-# from simulation.envs.robot_navigation_env import RobotNavigationEnv
-from simulation.envs.robot_navigation_env_v2 import RobotNavigationEnv
+from simulation.env_factory import create_env
+from rl.config_io import env_config_from_checkpoint_dir
 from rl.model_factory import create_qnetwork_from_arch, load_arch
 
 
@@ -21,8 +22,18 @@ def _create_model(model_type: str, obs_dim: int, action_dim: int):
 class LiveSimulator:
     """Loads a trained model and streams one navigation episode frame by frame."""
 
-    def __init__(self, model_type: str = "kan"):
-        self.env = RobotNavigationEnv()
+    def __init__(
+        self,
+        model_type: str = "kan",
+        env_config: Optional[Dict[str, Any]] = None,
+    ):
+        # Without an explicit env config, re-create the environment the
+        # checkpoint was trained in (from custom_dqn_{model}_config.json).
+        # That may be the builtin env or an external Unity / Gazebo adapter.
+        if env_config is None:
+            env_config = env_config_from_checkpoint_dir(CHECKPOINT_DIR, model_type)
+        self.env_config = env_config
+        self.env = create_env(env_config)
         self.obs_dim = self.env.observation_space.shape[0]
         self.action_dim = self.env.action_space.n
         self.model_type = model_type
@@ -63,24 +74,28 @@ class LiveSimulator:
         self.episode_step += 1
         done = bool(terminated or truncated)
 
-        # V2 env stores multiple obstacles as a list of (position, radius).
+        # Visualization attributes: external environments may not expose them,
+        # in which case the frame falls back to neutral values (the Live page
+        # renders whatever is present).
+        robot_pos = getattr(self.env, "robot_pos", None)
+        target_pos = getattr(self.env, "target_pos", None)
         obstacles = [
             {
                 "x": float(pos[0]),
                 "y": float(pos[1]),
                 "radius": float(radius),
             }
-            for pos, radius in self.env.obstacles
+            for pos, radius in (getattr(self.env, "obstacles", None) or [])
         ]
 
         frame = {
             "model": self.model_type,
             "world_size": float(getattr(self.env, "world_size", 20.0)),
-            "robot_x": float(self.env.robot_pos[0]),
-            "robot_y": float(self.env.robot_pos[1]),
-            "robot_angle": float(self.env.robot_angle),
-            "target_x": float(self.env.target_pos[0]),
-            "target_y": float(self.env.target_pos[1]),
+            "robot_x": float(robot_pos[0]) if robot_pos is not None else 0.0,
+            "robot_y": float(robot_pos[1]) if robot_pos is not None else 0.0,
+            "robot_angle": float(getattr(self.env, "robot_angle", 0.0)),
+            "target_x": float(target_pos[0]) if target_pos is not None else 0.0,
+            "target_y": float(target_pos[1]) if target_pos is not None else 0.0,
             "obstacles": obstacles,
             "action": action,
             "reward": float(reward),

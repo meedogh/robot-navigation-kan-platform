@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { getJSON, postJSON } from "../../lib/api";
 
 type FieldDef = {
   key: string;
   label: string;
-  type?: "int" | "float" | "select";
+  type?: "int" | "float" | "select" | "text";
   options?: { value: string; label: string }[];
   step?: number;
   min?: number;
@@ -40,6 +40,31 @@ const FIELD_GROUPS: { title: string; fields: FieldDef[] }[] = [
       { key: "env_min_obstacles", label: "Min obstacles", type: "int", min: 0 },
       { key: "env_max_obstacles", label: "Max obstacles", type: "int", min: 0 },
       { key: "env_sensor_range", label: "Sensor range", type: "float", min: 0.1, step: 0.5 },
+      { key: "env_robot_radius", label: "Robot radius", type: "float", min: 0.01, step: 0.05 },
+      { key: "env_target_radius", label: "Target radius", type: "float", min: 0.05, step: 0.05 },
+      { key: "env_max_speed", label: "Max speed", type: "float", min: 0.01, step: 0.05 },
+      { key: "env_turn_angle_deg", label: "Turn angle (deg)", type: "float", min: 1, step: 5 },
+    ],
+  },
+  {
+    title: "Environment Source",
+    fields: [
+      {
+        key: "env_source", label: "Environment", type: "select",
+        options: [
+          { value: "builtin", label: "Built-in (Python)" },
+          { value: "module", label: "External module (Unity / Gazebo / custom)" },
+        ],
+        hint: "External environments must follow the Gymnasium API contract (see README)",
+      },
+      {
+        key: "env_variant", label: "Built-in variant", type: "select",
+        options: [{ value: "v2", label: "v2 (6 actions)" }, { value: "v1", label: "v1 (4 actions)" }],
+      },
+      {
+        key: "env_module", label: "Module path", type: "text",
+        hint: "package.module:ClassName — importable from the backend Python environment, e.g. my_adapters.unity_env:UnityNavEnv",
+      },
     ],
   },
   {
@@ -78,14 +103,31 @@ type Job = {
   progress_label?: string;
   live_enabled?: boolean;
 };
+
+function downloadJSON(filename: string, data: unknown) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], {
+    type: "application/json",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 export default function Setup() {
   const [defaults, setDefaults] = useState<Record<string, string | number | null>>({});
   const [presets, setPresets] = useState<Record<string, Record<string, string | number | null>>>({});
   const [form, setForm] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [job, setJob] = useState<Job | null>(null);
   const [liveEnabled, setLiveEnabled] = useState(true);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   async function refreshStatus() {
     try {
@@ -203,6 +245,60 @@ export default function Setup() {
     }
   }
 
+  async function exportConfig() {
+    setError("");
+    setNotice("");
+    try {
+      const run = await postJSON<any>("/api/config/export", {
+        config: toConfig(),
+        name: `robotnav-${form.model_type || "mlp"}-run`,
+        description: "Exported from the RobotNav dashboard Setup page",
+      });
+      const filename = `${String(run.name ?? "robotnav-run").replace(
+        /[^A-Za-z0-9_.-]+/g,
+        "_"
+      )}.json`;
+      downloadJSON(filename, run);
+      setNotice(
+        `Run config exported to ${filename}. Import it here later, or run ` +
+          `"python -m rl.train_custom_dqn --config ${filename}" anywhere.`
+      );
+    } catch (e: any) {
+      setError(e?.response?.data?.detail ?? e.message);
+    }
+  }
+
+  async function importConfig(file: File) {
+    setError("");
+    setNotice("");
+    try {
+      const parsed = JSON.parse(await file.text());
+      const data = await postJSON<{
+        ok: boolean;
+        name: string;
+        config: Record<string, string | number | null>;
+        warnings: string[];
+      }>("/api/config/import", parsed);
+
+      const filled: Record<string, string> = {};
+      for (const [key, value] of Object.entries(data.config ?? {})) {
+        filled[key] = value === null || value === undefined ? "" : String(value);
+      }
+      setForm((prev) => ({ ...prev, ...filled }));
+
+      const prefix = `Imported run config "${data.name ?? file.name}".`;
+      setNotice(
+        data.warnings?.length ? `${prefix} ${data.warnings.join(" ")}` : prefix
+      );
+    } catch (e: any) {
+      if (e instanceof SyntaxError) {
+        setError(`${file.name} is not valid JSON.`);
+      } else {
+        setError(e?.response?.data?.detail ?? e.message);
+      }
+    }
+  }
+
   async function toggleJobLive(enabled: boolean) {
     // Optimistic update so the checkbox feels instant; the backend mirrors it.
     setJob((prev) => (prev ? { ...prev, live_enabled: enabled } : prev));
@@ -224,6 +320,8 @@ return (
       </p>
 
       {error && <div className="card">Error: {error}</div>}
+
+      {notice && !error && <div className="card">{notice}</div>}
 
       {job && (
         <div className="card">
@@ -304,6 +402,27 @@ return (
             <button className="secondary" onClick={loadLastRun}>
               Load Last Run
             </button>
+            <button className="secondary" onClick={exportConfig} disabled={running}>
+              Export Config
+            </button>
+            <button
+              className="secondary"
+              onClick={() => fileRef.current?.click()}
+              disabled={running}
+            >
+              Import Config
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="application/json,.json"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) importConfig(file);
+                e.target.value = "";
+              }}
+            />
           </div>
 
           {FIELD_GROUPS.map((group) => (
@@ -327,6 +446,14 @@ return (
                             </option>
                           ))}
                         </select>
+                      ) : f.type === "text" ? (
+                        <input
+                          id={`field-${f.key}`}
+                          type="text"
+                          value={value}
+                          placeholder="package.module:ClassName"
+                          onChange={(e) => setForm((p) => ({ ...p, [f.key]: e.target.value }))}
+                        />
                       ) : (
                         <input
                           id={`field-${f.key}`}
