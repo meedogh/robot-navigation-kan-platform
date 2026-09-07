@@ -225,6 +225,51 @@ def export_last_run_config(model_type: str):
     return _run_config_response(run, f"robotnav-last-run-{model_type}")
 
 
+@app.get("/api/model/export/{model_type}")
+def export_model_onnx(model_type: str):
+    """Download the best checkpoint of a model as an ONNX file.
+
+    The exported graph (input 'observations' -> output 'q_values') can be run
+    inside external simulators - e.g. Unity with Microsoft Sentis - so a model
+    trained here can drive a simulation built there ("train here, run it
+    there").  Works for the MLP and the KAN networks alike.
+    """
+    if model_type not in ("mlp", "kan"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"model_type must be 'mlp' or 'kan', got {model_type!r}",
+        )
+
+    from rl.model_export import (
+        ONNX_INPUT_NAME,
+        ONNX_OUTPUT_NAME,
+        export_checkpoint_to_onnx,
+        resolve_checkpoint_path,
+    )
+
+    try:
+        resolve_checkpoint_path(model_type, CHECKPOINT_DIR)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    try:
+        out_path = export_checkpoint_to_onnx(model_type, checkpoint_dir=CHECKPOINT_DIR)
+    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=500, detail=f"ONNX export failed: {exc}")
+
+    data = out_path.read_bytes()
+    filename = f"custom_dqn_{model_type}_best.onnx"
+    return Response(
+        content=data,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-ONNX-Input": ONNX_INPUT_NAME,
+            "X-ONNX-Output": ONNX_OUTPUT_NAME,
+        },
+    )
+
+
 @app.get("/api/training/status")
 def get_training_status():
     return training.status()

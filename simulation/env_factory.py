@@ -44,8 +44,16 @@ ENV_PARAM_NAMES: Tuple[str, ...] = (
     "turn_angle_deg",
 )
 
+# Extra constructor parameters used by bridge-based external environments
+# (e.g. my_adapters.unity_env.UnityNavEnv).  They are only persisted in run
+# configs whose source is "module", so builtin configs stay untouched.
+ENV_EXTRA_PARAM_NAMES: Tuple[str, ...] = ("host", "port", "timeout")
+
+# Extra parameters that are strings rather than numbers.
+ENV_STRING_PARAMS = {"host"}
+
 # Parameters that must stay integers when passed to an env constructor.
-ENV_INT_PARAMS = {"max_steps", "frame_skip", "min_obstacles", "max_obstacles"}
+ENV_INT_PARAMS = {"max_steps", "frame_skip", "min_obstacles", "max_obstacles", "port"}
 
 ENV_SOURCE_KEYS: Tuple[str, ...] = ("env_source", "env_variant", "env_module")
 
@@ -120,7 +128,9 @@ def _supported_kwargs(env_class, params: Optional[Dict[str, Any]]):
     skipped: List[str] = []
     for name, value in params.items():
         if name in accepted:
-            if name in ENV_INT_PARAMS:
+            if name in ENV_STRING_PARAMS:
+                kwargs[name] = str(value)
+            elif name in ENV_INT_PARAMS:
                 kwargs[name] = int(value)
             else:
                 kwargs[name] = float(value)
@@ -139,6 +149,10 @@ def env_config_from_flat(flat: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     flat = flat or {}
     params: Dict[str, Any] = {}
     for name in ENV_PARAM_NAMES:
+        key = f"env_{name}"
+        if key in flat and flat[key] is not None:
+            params[name] = flat[key]
+    for name in ENV_EXTRA_PARAM_NAMES:
         key = f"env_{name}"
         if key in flat and flat[key] is not None:
             params[name] = flat[key]

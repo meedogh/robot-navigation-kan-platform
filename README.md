@@ -222,69 +222,108 @@ python -m rl.train_custom_dqn --config unity_run.json
 Everything downstream — evaluation, live WebSocket simulation, KAN
 explainability — uses the same environment recorded in the run.
 
-### Unity ML-Agents sketch
+### Unity / Gazebo bridge (shipped)
 
-Create the scene with an Agent whose *observations* match the spec above and a
-Discrete Action Space of 6. Then wrap the ML-Agents Python API in a Gym env:
+The platform includes a dependency-free TCP bridge. The simulator runs a small
+server; `my_adapters.unity_env.UnityNavEnv` (a Gymnasium client) connects to
+it and behaves exactly like the builtin environment for the rest of the
+platform.
 
-```python
-# my_adapters/unity_env.py
-import numpy as np
-import gymnasium as gym
-from gymnasium import spaces
-from mlagents_envs.environment import UnityEnvironment
-from mlagents_envs.side_channel.engine_configuration_channel import EngineConfigurationChannel
+Why not the ML-Agents Python API? `mlagents_envs` 1.1.0 pins Python
+3.10.1–3.10.12 with `protobuf<3.21` and `numpy<1.24` — incompatible with this
+project's stack (Python 3.13, protobuf 7, numpy 2). The socket bridge has zero
+Python dependencies and works with **any** runtime that can open a TCP socket:
+Unity, Gazebo/ROS, Webots, or a simulator on another machine.
 
-class UnityNavEnv(gym.Env):
-    """Gym adapter for a RobotNav-contract Unity scene (see README 'The contract')."""
-
-    def __init__(self, scene_path=None, world_size=20.0, max_steps=300, **ignored):
-        channel = EngineConfigurationChannel()
-        self._env = UnityEnvironment(file_name=scene_path, side_channels=[channel])
-        channel.set_configuration_parameters(time_scale=100.0)  # train fast
-        self._env.reset()
-        self._behavior = next(iter(self._env.behavior_specs))
-        self.action_space = spaces.Discrete(6)
-        self.observation_space = spaces.Box(-1.0, 1.0, shape=(10,), dtype=np.float32)
-        self.max_steps = max_steps
-        self._step_count = 0
-
-    def reset(self, seed=None, options=None):
-        self._env.reset()
-        self._step_count = 0
-        return self._observation(), {}
-
-    def step(self, action):
-        self._set_action(int(action))
-        self._env.step()
-        self._step_count += 1
-        obs, reward, done = self._collect()   # map Unity rewards / end-episode flags
-        return obs, float(reward), bool(done), self._step_count >= self.max_steps, {}
+```
+RobotNav platform (Python)                        External simulator
+-------------------------------------------       -------------------------------
+rl/train_custom_dqn.py   <- Gymnasium API <-      Unity scene + unity_bridge/RobotNavBridge.cs
+rl/evaluate_saved_models.py   |                    Gazebo/ROS node (same protocol)
+dashboard (train / eval / live)  |                or python -m my_adapters.bridge_server
+my_adapters/unity_env.py  <== TCP, length-prefixed JSON (protocol v1) ==>
 ```
 
-(Full ML-Agents API details — decision requests, terminator flags, action
-branching — are documented by Unity; fill in the `_`-prefixed helpers from
-your scene's Agent setup. `simulation/envs/robot_navigation_env_v2.py` is the
-reference implementation of the contract.)
+**Protocol v1** (full spec: `my_adapters/bridge_protocol.py`): every message
+is a 4-byte big-endian length followed by UTF-8 JSON. The simulator sends a
+`hello` handshake (obs dim, action count, world size) on connect; the client
+sends `reset` / `step` / `close`; the simulator replies with `state` messages
+carrying `obs`, `reward`, `terminated`, `truncated`, the evaluation `info`
+keys and optional visualization data for the Live page.
 
-### Gazebo / ROS sketch
+### Unity quick start
 
-The same pattern applies: a thin `gym.Env` that publishes velocity commands
-(mapping the 6 discrete actions to `/cmd_vel` twist messages), reads `/odom` +
-LiDAR scans to build the 10-D observation, and detects goal-reached /
-collision for `info`. Whether you bridge with `rospy`/`rclpy` directly or use
-an existing ROS-Gym bridge, the run config only cares about the class path:
+1. Copy `unity_bridge/RobotNavBridge.cs` into your Unity project
+   (`Assets/Scripts/`), add an empty GameObject to a new scene, attach the
+   script and press **Play**. Ground, boundary walls, robot, target and the
+   randomized obstacles are created automatically; the world constants
+   (size, sensor range, speeds, ...) are Inspector fields matching the
+   builtin env defaults.
+2. The C# script is a 1:1 port of `robot_navigation_env_v2.py` — same
+   domain-randomized map generation with a BFS solvability check, same
+   kinematics, same reward, same analytic sector sensors. Every connection
+   gets its own simulation session (the platform opens one connection per
+   environment instance, e.g. train + eval).
+3. Copy `experiments/configs/unity_env_template.json`, adjust `host` / `port`
+   under `environment.params` if needed, and train:
+
+   ```powershell
+   python -m rl.train_custom_dqn --config experiments/configs/unity_env_template.json
+   ```
+
+   The Unity scene must be running **before** training starts, on the machine
+   that runs the training process.
+
+### Test the bridge without Unity
+
+```powershell
+python -m my_adapters.bridge_server --port 5577   # terminal 1: reference simulator
+python -m my_adapters.smoke_test                  # terminal 2: end-to-end check
+```
+
+`my_adapters.bridge_server` wraps the builtin v2 environment in the same
+protocol the Unity script speaks — it is the parity reference for any new
+simulator implementation and proves the whole pipeline without Unity.
+
+### Gazebo / ROS
+
+Implement the same protocol on the simulator side: map the six discrete
+actions to `/cmd_vel` (or direct joint commands), publish the normalized 10-D
+observation from `/odom` + LiDAR scans, and report `reached_target` /
+`collision` in `info`. `my_adapters/bridge_protocol.py` is stdlib-only and
+self-contained — port it to `rclpy`/`rospy` or any other language 1:1. The
+run config only cares about the adapter class path:
 
 ```json
-{ "source": "module", "module": "my_adapters.gazebo_env:GazeboNavEnv", "params": {} }
+{ "source": "module", "module": "my_adapters.unity_env:UnityNavEnv", "params": { "host": "127.0.0.1", "port": 5577 } }
 ```
+
+### "Train here, run it there" — ONNX model export
+
+```powershell
+python -m rl.model_export --model mlp          # or --model kan
+```
+
+| Dashboard | API |
+| --- | --- |
+| *(download via the endpoint directly)* | `GET /api/model/export/{mlp\|kan}` |
+
+The exported graph (input `observations` → output `q_values`, dynamic batch
+axis) runs inside Unity via **Microsoft Sentis**, or any ONNX runtime — a
+model trained on this platform can then drive a simulation built in the
+external tool with no Python involved. The custom KAN layer (piecewise-linear
+basis functions + einsum) exports faithfully too: both model types are
+verified against onnxruntime after export (max \|ΔQ\| < 1e-4). Files are
+written next to the checkpoint by default, or to `--out`.
 
 ### Running it through the dashboard
 
 Import the run config on the **Setup** page (Import Config). The backend
 warns if the module can't be imported on that machine, then trains, evaluates
-and streams live frames from *your* environment. Simulators like Unity or
-Gazebo must live on the machine that runs the backend.
+and streams live frames from *your* environment. The simulator must live on
+the machine that runs the backend; `host` / `port` are part of
+`environment.params` in the config file (the Setup form covers the module
+path; bridge connection parameters come from the imported file).
 
 ## 3. Run the backend (FastAPI)
 
@@ -308,6 +347,7 @@ Health check: <http://127.0.0.1:8000/> · Interactive docs: <http://127.0.0.1:80
 | `POST /api/config/export` | flat config in → portable run-config JSON download |
 | `POST /api/config/import` | run config JSON in → validated flat config + warnings |
 | `GET /api/config/export/{mlp\|kan}` | last run config as a downloadable run-config file |
+| `GET /api/model/export/{mlp\|kan}` | best checkpoint as an ONNX download (Unity Sentis-ready) |
 | `POST /api/training/start` | start a background training job `{"config": {...}}` |
 | `GET /api/training/status` | current job status + live/training busy flag |
 | `GET /api/training/progress` | evaluation rows collected so far |

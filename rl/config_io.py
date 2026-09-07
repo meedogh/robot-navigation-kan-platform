@@ -155,11 +155,17 @@ def validate_run_config(data: Any) -> Dict[str, Any]:
         if params is not None:
             if not isinstance(params, dict):
                 raise ValueError("environment.params must be a JSON object")
-            _reject_unknown_keys(
-                params.keys(), env_factory.ENV_PARAM_NAMES, "environment.params"
-            )
+            allowed_params = set(env_factory.ENV_PARAM_NAMES)
+            if source == "module":
+                allowed_params |= set(env_factory.ENV_EXTRA_PARAM_NAMES)
+            _reject_unknown_keys(params.keys(), allowed_params, "environment.params")
             for key, value in params.items():
-                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                if key in env_factory.ENV_STRING_PARAMS:
+                    if not isinstance(value, str):
+                        raise ValueError(
+                            f"environment.params.{key} must be a string, got {value!r}"
+                        )
+                elif isinstance(value, bool) or not isinstance(value, (int, float)):
                     raise ValueError(
                         f"environment.params.{key} must be a number, got {value!r}"
                     )
@@ -185,14 +191,21 @@ def run_config_from_flat(
     """
     flat = validate_training_config(flat)
 
+    source = flat.get("env_source") or "builtin"
+
     env_params = {
         param: flat[f"env_{param}"] for param in env_factory.ENV_PARAM_NAMES
     }
+    # Bridge connection parameters only make sense for module environments.
+    if source == "module":
+        for param in env_factory.ENV_EXTRA_PARAM_NAMES:
+            value = flat.get(f"env_{param}")
+            if value is not None:
+                env_params[param] = value
     training_section = {
         key: value for key, value in flat.items() if not key.startswith("env_")
     }
 
-    source = flat.get("env_source") or "builtin"
     spec = env_factory.builtin_env_spec() if source == "builtin" else {}
 
     return {
