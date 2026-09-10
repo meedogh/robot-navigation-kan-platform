@@ -5,7 +5,56 @@ frames emitted by ``backend.live_sim.LiveSimulator``, so the Live page's canvas
 renders saved-model runs and active-job runs identically.
 """
 
+import math
 from typing import Any, Dict, Optional
+
+
+# ---------------------------------------------------------------------------
+# Obstacle serialization (shape-aware)
+# ---------------------------------------------------------------------------
+def serialize_obstacles(raw) -> list:
+    """Convert an environment's ``obstacles`` attribute to JSON-safe dicts.
+
+    Supports the shape-dict format used by the builtin v2 environment
+    (``{"shape": "rect", "pos": ..., "width": ..., ...}`` / circle dicts) and
+    the legacy ``(pos, radius)`` tuple format used by older environments and
+    external adapters.  Every entry carries ``shape``, ``x``, ``y`` and a
+    ``radius`` (bounding circle) so renderers that only know circles keep
+    working; rectangles additionally carry ``width`` / ``height`` / ``angle``.
+    """
+    obstacles = []
+
+    for obstacle in raw or []:
+        if isinstance(obstacle, dict):
+            pos = obstacle.get("pos", (0.0, 0.0))
+            entry = {
+                "shape": obstacle.get("shape", "circle"),
+                "x": float(pos[0]),
+                "y": float(pos[1]),
+            }
+            if entry["shape"] == "rect":
+                entry["width"] = float(obstacle.get("width", 1.0))
+                entry["height"] = float(obstacle.get("height", 1.0))
+                entry["angle"] = float(obstacle.get("angle", 0.0))
+                # Bounding circle keeps legacy renderers sane
+                entry["radius"] = 0.5 * math.hypot(
+                    entry["width"], entry["height"]
+                )
+            else:
+                entry["radius"] = float(obstacle.get("radius", 0.5))
+        else:
+            pos, radius = obstacle
+            obstacles.append({
+                "shape": "circle",
+                "x": float(pos[0]),
+                "y": float(pos[1]),
+                "radius": float(radius),
+            })
+            continue
+
+        obstacles.append(entry)
+
+    return obstacles
 
 
 def build_frame(
@@ -30,14 +79,7 @@ def build_frame(
     """
     robot_pos = getattr(env, "robot_pos", None)
     target_pos = getattr(env, "target_pos", None)
-    obstacles = [
-        {
-            "x": float(pos[0]),
-            "y": float(pos[1]),
-            "radius": float(radius),
-        }
-        for pos, radius in (getattr(env, "obstacles", None) or [])
-    ]
+    obstacles = serialize_obstacles(getattr(env, "obstacles", None))
 
     frame: Dict[str, Any] = {
         "model": model_type,

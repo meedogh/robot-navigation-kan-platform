@@ -27,6 +27,15 @@ share/python-wheels/
 MANIFEST
 experiments/checkpoints/
 
+# Raw per-seed sweep output (rl.run_seeds) - regenerable, so not tracked.
+# The aggregates stay trackable: experiments/results/seed_runs/seed_summary.csv
+# and experiments/results/seed_comparison_stats.csv
+experiments/results/seed_runs/seed_*/
+
+# Smoke-test result artifacts (tiny training runs used for validation)
+experiments/results/seed_smoke/
+experiments/results/rect_smoke/
+
 # PyInstaller
 #   Usually these files are written by a python script from a template
 #   before PyInstaller builds the exe, so as to inject date/other infos into it.

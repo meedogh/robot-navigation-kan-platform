@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional, Tuple
 BUILTIN_ENVS: Dict[str, str] = {
     "v1": "simulation.envs.robot_navigation_env:RobotNavigationEnv",
     "v2": "simulation.envs.robot_navigation_env_v2:RobotNavigationEnv",
+    "custom": "simulation.envs.custom_navigation_env:CustomNavigationEnv",
 }
 DEFAULT_VARIANT = "v2"
 
@@ -42,6 +43,9 @@ ENV_PARAM_NAMES: Tuple[str, ...] = (
     "target_radius",
     "max_speed",
     "turn_angle_deg",
+    "rect_obstacle_ratio",
+    "rect_rotation",
+    "layout",
 )
 
 # Extra constructor parameters used by bridge-based external environments
@@ -50,10 +54,10 @@ ENV_PARAM_NAMES: Tuple[str, ...] = (
 ENV_EXTRA_PARAM_NAMES: Tuple[str, ...] = ("host", "port", "timeout")
 
 # Extra parameters that are strings rather than numbers.
-ENV_STRING_PARAMS = {"host"}
+ENV_STRING_PARAMS = {"host", "layout"}
 
 # Parameters that must stay integers when passed to an env constructor.
-ENV_INT_PARAMS = {"max_steps", "frame_skip", "min_obstacles", "max_obstacles", "port"}
+ENV_INT_PARAMS = {"max_steps", "frame_skip", "min_obstacles", "max_obstacles", "port", "rect_rotation"}
 
 ENV_SOURCE_KEYS: Tuple[str, ...] = ("env_source", "env_variant", "env_module")
 

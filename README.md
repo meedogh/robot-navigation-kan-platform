@@ -11,8 +11,8 @@ A **FastAPI** backend serves training results, a KAN explainability endpoint, an
 
 ```
 ├── simulation/                  # Gymnasium environment
-│   ├── envs/robot_navigation_env.py       # env used for training/eval (4 actions, 10-D obs)
-│   ├── envs/robot_navigation_env_v2.py    # experimental larger env (domain randomization)
+│   ├── envs/robot_navigation_env.py       # simple legacy env (4 actions, raycast sensors)
+│   ├── envs/robot_navigation_env_v2.py    # ★ main env: domain randomization, circle + rotated-rectangle obstacles
 │   ├── env_factory.py                     # ★ builds envs from run configs (builtin registry
 │   │                                      #   + external Unity/Gazebo/custom module loading)
 │   └── test_random_agent.py               # quick smoke test with a random agent
@@ -28,6 +28,10 @@ A **FastAPI** backend serves training results, a KAN explainability endpoint, an
 │   ├── compare_agents.py        # seed-aggregated MLP vs KAN comparison + statistics
 │   └── model_factory.py         # central Q-network factory (keeps architectures consistent)
 ├── backend/                     # FastAPI app (results API, KAN explainer, live WS sim)
+├── my_adapters/                 # external environment adapters & examples
+│   ├── custom_rect_env.py       # ★ example custom env source (fixed rectangular walls)
+│   ├── unity_env.py             # Unity bridge Gymnasium adapter
+│   └── bridge_server.py         # TCP bridge reference server (protocol v1)
 ├── frontend/dashboard/          # Next.js dashboard (Overview / Training / Live / Explain)
 └── experiments/
     ├── configs/                 # example portable run-config files
@@ -128,6 +132,39 @@ python -m rl.compare_agents           # aggregated curves + statistical tests
   success rate with a bootstrap 95% CI, per-seed std, collision rate, and a
   two-sided permutation test on the pooled final-evaluation episode returns
   (non-parametric, no scipy needed — appropriate for the bimodal returns).
+
+### Environment variations and custom sources
+
+**Obstacle shape variations (builtin v2).** Obstacles are sampled as circles
+*or* rectangles; two flat-config keys control the mix (also on the Setup page):
+
+| Key | Meaning |
+| --- | --- |
+| `env_rect_obstacle_ratio` | probability that an obstacle is a rectangle (0 = all circles, 1 = all rectangles, default 0.5) |
+| `env_rect_rotation` | `1` = rectangles spawn at random angles, `0` = axis-aligned (default 1) |
+
+Collision, raycast sensors and the BFS solvability check are all shape-aware,
+and the live dashboard renders rotated rectangles. Example config file:
+
+```json
+{ "env_rect_obstacle_ratio": 1.0, "env_rect_rotation": 1 }
+```
+
+**Custom environment sources.** Set *Environment Source → External module* on
+the Setup page (or `"env_source": "module"` in a run config) and give the
+module path as `package.module:ClassName`. The class must follow the Gymnasium
+contract (6 actions, 10-D observation layout, `obstacles` attribute) documented
+in `simulation/env_factory.py::builtin_env_spec`. The repo ships a working
+example with fixed rectangular walls:
+
+```text
+my_adapters.custom_rect_env:RectNavEnv
+```
+
+Before committing to a long run, click **Test Environment** on the Setup page —
+it calls `POST /api/env/test`, which instantiates the env, resets it, takes
+three random steps and reports the observed spec (obs dim, action count,
+obstacle shapes) or a readable error.
 
 ## Portable run configs (export / import)
 
@@ -385,6 +422,7 @@ Health check: <http://127.0.0.1:8000/> · Interactive docs: <http://127.0.0.1:80
 | `POST /api/evaluate/start` | evaluate all saved checkpoints `{"episodes": 100}` |
 | `GET /api/evaluate/status` | evaluation job status |
 | `GET /api/checkpoints` | files in `experiments/checkpoints/` |
+| `POST /api/env/test` | probe an environment config (builtin/module): spec + 3 random steps — Setup page "Test Environment" |
 | `GET /api/explain/kan` | KAN feature importance + learned curves *(requires a KAN checkpoint)* |
 | `WS /ws/live` | live episode streaming — client sends `{"model": "kan" \| "mlp"}` *(requires a checkpoint)* |
 

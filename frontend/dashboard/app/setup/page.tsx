@@ -44,6 +44,15 @@ const FIELD_GROUPS: { title: string; fields: FieldDef[] }[] = [
       { key: "env_target_radius", label: "Target radius", type: "float", min: 0.05, step: 0.05 },
       { key: "env_max_speed", label: "Max speed", type: "float", min: 0.01, step: 0.05 },
       { key: "env_turn_angle_deg", label: "Turn angle (deg)", type: "float", min: 1, step: 5 },
+      {
+        key: "env_rect_obstacle_ratio", label: "Rectangle obstacle ratio", type: "float", min: 0, max: 1, step: 0.1,
+        hint: "0 = all circles, 1 = all rectangles (v2 only)",
+      },
+      {
+        key: "env_rect_rotation", label: "Rectangle rotation", type: "select",
+        options: [{ value: "1", label: "Rotated" }, { value: "0", label: "Axis-aligned" }],
+        hint: "Whether rectangles spawn at random angles (v2 only)",
+      },
     ],
   },
   {
@@ -59,11 +68,15 @@ const FIELD_GROUPS: { title: string; fields: FieldDef[] }[] = [
       },
       {
         key: "env_variant", label: "Built-in variant", type: "select",
-        options: [{ value: "v2", label: "v2 (6 actions)" }, { value: "v1", label: "v1 (4 actions)" }],
+        options: [
+          { value: "v2", label: "v2 (6 actions, random obstacles)" },
+          { value: "v1", label: "v1 (4 actions, single obstacle)" },
+          { value: "custom", label: "Custom v3 (own obstacle layout)" },
+        ],
       },
       {
         key: "env_module", label: "Module path", type: "text",
-        hint: "package.module:ClassName — importable from the backend Python environment, e.g. my_adapters.unity_env:UnityNavEnv",
+        hint: "package.module:ClassName — importable from the backend Python environment. Try the shipped example: my_adapters.custom_rect_env:RectNavEnv",
       },
     ],
   },
@@ -114,6 +127,38 @@ type Job = {
   live_enabled?: boolean;
 };
 
+type LayoutObstacle = {
+  shape: "circle" | "rect";
+  x: number;
+  y: number;
+  radius?: number;
+  width?: number;
+  height?: number;
+  angle?: number; // radians (stored); edited as degrees in the UI
+};
+
+function parseLayout(json: string | undefined): LayoutObstacle[] {
+  if (!json) return [];
+  try {
+    const value = JSON.parse(json);
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+}
+
+function layoutToJSON(rows: LayoutObstacle[]): string {
+  return JSON.stringify(rows);
+}
+
+// Built-in example: a corridor map with a mix of rectangles and a circle.
+const EXAMPLE_LAYOUT: LayoutObstacle[] = [
+  { shape: "rect", x: 0, y: -3, width: 8, height: 0.8, angle: 0 },
+  { shape: "rect", x: 5, y: 4, width: 0.8, height: 5, angle: Math.PI / 6 },
+  { shape: "rect", x: -5, y: 3.5, width: 0.8, height: 4, angle: 0 },
+  { shape: "circle", x: -2, y: 6, radius: 1.2 },
+];
+
 function downloadJSON(filename: string, data: unknown) {
   const blob = new Blob([JSON.stringify(data, null, 2)], {
     type: "application/json",
@@ -128,6 +173,102 @@ function downloadJSON(filename: string, data: unknown) {
   URL.revokeObjectURL(url);
 }
 
+function CustomLayoutRow({
+  obstacle,
+  onChange,
+  onAngleDeg,
+  onRemove,
+}: {
+  obstacle: LayoutObstacle;
+  onChange: (key: keyof LayoutObstacle, value: string) => void;
+  onAngleDeg: (degrees: string) => void;
+  onRemove: () => void;
+}) {
+  return (
+    <tr>
+      <td>
+        <select
+          value={obstacle.shape}
+          onChange={(e) => onChange("shape", e.target.value)}
+        >
+          <option value="circle">circle</option>
+          <option value="rect">rect</option>
+        </select>
+      </td>
+      <td>
+        <input
+          type="number"
+          step={0.5}
+          style={{ width: 64 }}
+          value={obstacle.x}
+          onChange={(e) => onChange("x", e.target.value)}
+        />
+      </td>
+      <td>
+        <input
+          type="number"
+          step={0.5}
+          style={{ width: 64 }}
+          value={obstacle.y}
+          onChange={(e) => onChange("y", e.target.value)}
+        />
+      </td>
+      <td>
+        {obstacle.shape === "circle" ? (
+          <input
+            type="number"
+            step={0.1}
+            min={0.05}
+            style={{ width: 64 }}
+            title="radius"
+            value={obstacle.radius ?? 1}
+            onChange={(e) => onChange("radius", e.target.value)}
+          />
+        ) : (
+          <span style={{ display: "flex", gap: 4 }}>
+            <input
+              type="number"
+              step={0.5}
+              min={0.05}
+              style={{ width: 56 }}
+              title="width"
+              value={obstacle.width ?? 1}
+              onChange={(e) => onChange("width", e.target.value)}
+            />
+            <input
+              type="number"
+              step={0.5}
+              min={0.05}
+              style={{ width: 56 }}
+              title="height"
+              value={obstacle.height ?? 1}
+              onChange={(e) => onChange("height", e.target.value)}
+            />
+          </span>
+        )}
+      </td>
+      <td>
+        {obstacle.shape === "rect" ? (
+          <input
+            type="number"
+            step={5}
+            style={{ width: 60 }}
+            value={((obstacle.angle ?? 0) * 180) / Math.PI}
+            onChange={(e) => onAngleDeg(e.target.value)}
+          />
+        ) : (
+          <span className="muted">—</span>
+        )}
+      </td>
+      <td>
+        <button className="secondary" onClick={onRemove} title="Remove obstacle">
+          ✕
+        </button>
+      </td>
+    </tr>
+  );
+}
+
 export default function Setup() {
   const [defaults, setDefaults] = useState<Record<string, string | number | null>>({});
   const [presets, setPresets] = useState<Record<string, Record<string, string | number | null>>>({});
@@ -137,7 +278,92 @@ export default function Setup() {
   const [notice, setNotice] = useState("");
   const [job, setJob] = useState<Job | null>(null);
   const [liveEnabled, setLiveEnabled] = useState(true);
+  const [envTest, setEnvTest] = useState<{
+    testing: boolean;
+    ok: boolean;
+    message: string;
+  }>({ testing: false, ok: false, message: "" });
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // --- Custom v3 layout editor --------------------------------------
+  const previewRef = useRef<HTMLCanvasElement>(null);
+  const layoutRows = parseLayout(form.env_layout);
+  const worldSize = parseFloat(form.env_world_size) || 20;
+
+  function writeLayout(rows: LayoutObstacle[]) {
+    setForm((p) => ({ ...p, env_layout: layoutToJSON(rows) }));
+  }
+
+  function updateObstacle(i: number, key: keyof LayoutObstacle, value: string) {
+    const rows = layoutRows.map((r, idx) => {
+      if (idx !== i) return r;
+      if (key === "shape") return { ...r, shape: value as "circle" | "rect" };
+      const num = parseFloat(value);
+      if (Number.isNaN(num)) return r;
+      return { ...r, [key]: num };
+    });
+    writeLayout(rows);
+  }
+
+  function updateAngleDeg(i: number, degrees: string) {
+    const deg = parseFloat(degrees);
+    if (Number.isNaN(deg)) return;
+    const rows = layoutRows.map((r, idx) =>
+      idx === i ? { ...r, angle: (deg * Math.PI) / 180 } : r
+    );
+    writeLayout(rows);
+  }
+
+  function addObstacle(shape: "circle" | "rect") {
+    writeLayout([
+      ...layoutRows,
+      shape === "circle"
+        ? { shape, x: 0, y: 0, radius: 1 }
+        : { shape, x: 0, y: 0, width: 4, height: 0.8, angle: 0 },
+    ]);
+  }
+
+  function removeObstacle(i: number) {
+    writeLayout(layoutRows.filter((_, idx) => idx !== i));
+  }
+
+  useEffect(() => {
+    const canvas = previewRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const size = 240;
+    const toC = (v: number) => ((v + worldSize / 2) / worldSize) * size;
+    const scale = size / worldSize;
+
+    ctx.clearRect(0, 0, size, size);
+    ctx.strokeStyle = "#1a2233";
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 8; i++) {
+      const p = (i / 8) * size;
+      ctx.beginPath(); ctx.moveTo(p, 0); ctx.lineTo(p, size); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, p); ctx.lineTo(size, p); ctx.stroke();
+    }
+
+    ctx.fillStyle = "#ff5c7a";
+    for (const o of layoutRows) {
+      if (o.shape === "rect") {
+        ctx.save();
+        ctx.translate(toC(o.x), toC(o.y));
+        ctx.rotate(-(o.angle ?? 0));
+        const w = Math.max(3, (o.width ?? 1) * scale);
+        const h = Math.max(3, (o.height ?? 1) * scale);
+        ctx.fillRect(-w / 2, -h / 2, w, h);
+        ctx.restore();
+      } else {
+        ctx.beginPath();
+        ctx.arc(toC(o.x), toC(o.y), Math.max(3, (o.radius ?? 1) * scale), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }, [layoutRows, worldSize]);
+  // --- end layout editor --------------------------------------------
 
   async function refreshStatus() {
     try {
@@ -231,6 +457,25 @@ export default function Setup() {
       } else {
         setError(e.message);
       }
+    }
+  }
+
+  async function testEnvironment() {
+    setEnvTest({ testing: true, ok: false, message: "" });
+    try {
+      const data = await postJSON<any>("/api/env/test", toConfig());
+      const shapes = (data.obstacle_shapes ?? []).join(", ") || "none";
+      setEnvTest({
+        testing: false,
+        ok: true,
+        message: `OK — ${data.env_class} (${data.source}${data.module ? ": " + data.module : ""}) · obs dim ${data.obs_dim} · ${data.n_actions} actions · world ${data.world_size} · ${data.num_obstacles} obstacles (${shapes}) · 3 random steps ran fine`,
+      });
+    } catch (e: any) {
+      setEnvTest({
+        testing: false,
+        ok: false,
+        message: e?.response?.data?.detail ?? e.message,
+      });
     }
   }
 
@@ -412,6 +657,13 @@ return (
             <button className="secondary" onClick={loadLastRun}>
               Load Last Run
             </button>
+            <button
+              className="secondary"
+              onClick={testEnvironment}
+              disabled={envTest.testing || running}
+            >
+              {envTest.testing ? "Testing..." : "Test Environment"}
+            </button>
             <button className="secondary" onClick={exportConfig} disabled={running}>
               Export Config
             </button>
@@ -434,6 +686,19 @@ return (
               }}
             />
           </div>
+
+          {envTest.message && (
+            <p
+              style={{
+                margin: "0 0 12px",
+                color: envTest.ok ? "#38d39f" : "#ff5c7a",
+                whiteSpace: "pre-wrap",
+              }}
+            >
+              {envTest.ok ? "✓ " : "✗ "}
+              {envTest.message}
+            </p>
+          )}
 
           {FIELD_GROUPS.map((group) => (
             <div key={group.title} style={{ marginBottom: 20 }}>
@@ -482,6 +747,75 @@ return (
               </div>
             </div>
           ))}
+
+          {form.env_variant === "custom" && (
+            <div style={{ marginBottom: 20 }}>
+              <h2 className="section-title">Custom Layout (v3)</h2>
+              <p className="hint" style={{ marginBottom: 8 }}>
+                Design a fixed obstacle map. Coordinates are world units from
+                the center (range ±{worldSize / 2}). Robot and target spawn
+                points stay random; the map itself is fixed — ideal for
+                comparing MLP vs KAN on the exact same level.
+              </p>
+              <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+                <canvas
+                  ref={previewRef}
+                  width={240}
+                  height={240}
+                  style={{ border: "1px solid #232d42", borderRadius: 6 }}
+                />
+                <div style={{ flex: 1, minWidth: 320 }}>
+                  <div className="actions" style={{ marginTop: 0, marginBottom: 8 }}>
+                    <button className="secondary" onClick={() => addObstacle("circle")}>
+                      + Circle
+                    </button>
+                    <button className="secondary" onClick={() => addObstacle("rect")}>
+                      + Rectangle
+                    </button>
+                    <button
+                      className="secondary"
+                      onClick={() => writeLayout(EXAMPLE_LAYOUT)}
+                    >
+                      Load example corridor map
+                    </button>
+                    <button className="secondary" onClick={() => writeLayout([])}>
+                      Clear
+                    </button>
+                  </div>
+                  {layoutRows.length === 0 ? (
+                    <p className="muted">
+                      Empty map (robot navigates to the target with no
+                      obstacles). Add obstacles above or load the example.
+                    </p>
+                  ) : (
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Shape</th>
+                          <th>X</th>
+                          <th>Y</th>
+                          <th>Size</th>
+                          <th>Angle°</th>
+                          <th></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {layoutRows.map((o, i) => (
+                          <CustomLayoutRow
+                            key={i}
+                            obstacle={o}
+                            onChange={(key, value) => updateObstacle(i, key, value)}
+                            onAngleDeg={(value) => updateAngleDeg(i, value)}
+                            onRemove={() => removeObstacle(i)}
+                          />
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="actions">
             <button onClick={start} disabled={running}>

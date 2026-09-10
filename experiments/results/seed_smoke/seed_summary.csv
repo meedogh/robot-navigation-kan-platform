@@ -1,3 +1,0 @@
-model_type,seed,status,train_log,episodes_log,final_step,final_success_rate,final_collision_rate,final_mean_reward,final_std_reward,final_mean_steps,best_step,best_success_rate,best_mean_reward
-mlp,7,skipped-existing,experiments\results\seed_smoke\seed_7\custom_dqn_mlp_train_log.csv,experiments\results\seed_smoke\seed_7\custom_dqn_mlp_eval_episodes.csv,1500,0.4,0.6,18.914212107419957,104.49062805422162,14.8,1500,0.4,18.914212107419957
-kan,7,skipped-existing,experiments\results\seed_smoke\seed_7\custom_dqn_kan_train_log.csv,experiments\results\seed_smoke\seed_7\custom_dqn_kan_eval_episodes.csv,1500,0.8,0.2,101.87669787907598,93.80937888055652,14.2,1500,0.8,101.87669787907598

@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from simulation.env_factory import create_env
+from simulation.env_factory import create_env, resolve_env_class
 from simulation.envs.robot_navigation_env_v2 import RobotNavigationEnv  # noqa: F401 (kept for backwards compatibility)
 from rl.dqn.dqn_agent import DQNAgent
 from rl.frames import build_frame
@@ -57,6 +57,15 @@ DEFAULT_TRAINING_CONFIG: Dict[str, Any] = {
     "env_max_speed": 0.35,
     "env_turn_angle_deg": 30.0,
 
+    # v2 obstacle shape variation
+    "env_rect_obstacle_ratio": 0.5,
+    "env_rect_rotation": 1,
+
+    # v3 custom map layout: JSON list of obstacle objects
+    # (see simulation/envs/custom_navigation_env.py). Only used by the
+    # "custom" builtin variant.
+    "env_layout": None,
+
     # environment source: the builtin registry, or any external Gymnasium
     # environment class (Unity ML-Agents, Gazebo/ROS bridge, custom module).
     "env_source": "builtin",
@@ -69,13 +78,14 @@ _INT_KEYS = {
     "buffer_size", "batch_size", "epsilon_decay_steps", "target_update_interval",
     "mlp_hidden_dim", "kan_hidden_dim", "kan_grid_size",
     "env_max_steps", "env_frame_skip", "env_min_obstacles", "env_max_obstacles",
+    "env_rect_rotation",
 }
 
 _FLOAT_KEYS = {
     "learning_rate", "gamma",
     "epsilon_start", "epsilon_end", "kan_grid_range",
     "huber_delta",
-    "env_world_size", "env_sensor_range",
+    "env_world_size", "env_sensor_range", "env_rect_obstacle_ratio",
     "env_robot_radius", "env_target_radius", "env_max_speed", "env_turn_angle_deg",
 }
 
@@ -123,6 +133,24 @@ def validate_training_config(raw: Optional[Dict[str, Any]] = None) -> Dict[str, 
         raise ValueError("env_max_obstacles must be >= env_min_obstacles")
     if config["env_world_size"] <= 2.0:
         raise ValueError("env_world_size must be > 2.0")
+    if not (0.0 <= config["env_rect_obstacle_ratio"] <= 1.0):
+        raise ValueError("env_rect_obstacle_ratio must be in [0, 1]")
+    if config["env_rect_rotation"] not in (0, 1):
+        raise ValueError("env_rect_rotation must be 0 or 1")
+
+    layout = config["env_layout"]
+    if layout not in (None, ""):
+        import json as _json
+
+        if isinstance(layout, str):
+            try:
+                parsed_layout = _json.loads(layout)
+            except _json.JSONDecodeError as exc:
+                raise ValueError(f"env_layout is not valid JSON: {exc}") from exc
+        else:
+            parsed_layout = layout
+        if not isinstance(parsed_layout, list):
+            raise ValueError("env_layout must be a JSON list of obstacle objects")
 
     return config
 
@@ -275,14 +303,28 @@ def train(
         "target_radius": config["env_target_radius"],
         "max_speed": config["env_max_speed"],
         "turn_angle_deg": config["env_turn_angle_deg"],
+        "rect_obstacle_ratio": config["env_rect_obstacle_ratio"],
+        "rect_rotation": bool(config["env_rect_rotation"]),
     }
 
-    # env_source = "builtin" -> RobotNavigationEnv (v2) with env_kwargs;
-    # env_source = "module"  -> any external Gymnasium environment class,
-    # e.g. a Unity ML-Agents or Gazebo/ROS adapter (see rl/config_io.py).
+    # The fixed-map layout only applies to the "custom" builtin variant;
+    # other envs would just emit "ignores unsupported params" warnings.
+    if (
+        config.get("env_source", "builtin") == "builtin"
+        and config.get("env_variant") == "custom"
+        and config.get("env_layout") not in (None, "")
+    ):
+        env_kwargs["layout"] = config["env_layout"]
+
+    # env_source = "builtin" -> resolve the class by variant from the registry
+    # (v1 / v2 / custom); env_source = "module" -> any external Gymnasium
+    # environment class, e.g. a Unity ML-Agents or Gazebo/ROS adapter.
     if config.get("env_source", "builtin") == "builtin":
-        env = RobotNavigationEnv(**env_kwargs)
-        eval_env = RobotNavigationEnv(**env_kwargs)
+        env_class = resolve_env_class(
+            source="builtin", variant=config.get("env_variant")
+        )
+        env = env_class(**env_kwargs)
+        eval_env = env_class(**env_kwargs)
     else:
         env = create_env(config)
         eval_env = create_env(config)

@@ -36,6 +36,8 @@ class RobotNavigationEnv(gym.Env):
         target_radius: float = 0.8,
         max_speed: float = 0.35,
         turn_angle_deg: float = 30.0,
+        rect_obstacle_ratio: float = 0.5,
+        rect_rotation: bool = True,
     ):
         super().__init__()
 
@@ -48,6 +50,12 @@ class RobotNavigationEnv(gym.Env):
         self.min_obstacles = min_obstacles
         self.max_obstacles = max_obstacles
         self.sensor_range = sensor_range
+
+        # Obstacle shape variation: with probability `rect_obstacle_ratio` a
+        # sampled obstacle is an axis-aligned (or rotated) rectangle instead of
+        # a circle.  0.0 = all circles, 1.0 = all rectangles.
+        self.rect_obstacle_ratio = float(np.clip(rect_obstacle_ratio, 0.0, 1.0))
+        self.rect_rotation = bool(rect_rotation)
 
         # Physics constants (previously hardcoded; now configurable so a run
         # config can fully describe the environment, e.g. for re-implementing
@@ -287,9 +295,8 @@ class RobotNavigationEnv(gym.Env):
         )
 
     def _check_collision(self):
-        for obstacle_pos, obstacle_radius in self.obstacles:
-            distance = self._distance(self.robot_pos, obstacle_pos)
-            if distance < self.robot_radius + obstacle_radius:
+        for obstacle in self.obstacles:
+            if self._robot_hits_obstacle(self.robot_pos, obstacle):
                 return True
         return False
 
@@ -312,26 +319,52 @@ class RobotNavigationEnv(gym.Env):
                     size=(2,),
                 ).astype(np.float32)
 
-                radius = float(self.np_random.uniform(0.5, 1.3))
+                if self.np_random.random() < self.rect_obstacle_ratio:
+                    # Rectangle obstacle (axis-aligned or rotated).  Half
+                    # extents sampled from the same size range as circle
+                    # radii so both shapes occupy a comparable footprint.
+                    half_w = float(self.np_random.uniform(0.5, 1.3))
+                    half_h = float(self.np_random.uniform(0.5, 1.3))
+                    angle = (
+                        float(self.np_random.uniform(-np.pi / 2.0, np.pi / 2.0))
+                        if self.rect_rotation
+                        else 0.0
+                    )
+                    obstacle = {
+                        "shape": "rect",
+                        "pos": pos,
+                        "width": 2.0 * half_w,
+                        "height": 2.0 * half_h,
+                        "angle": angle,
+                    }
+                else:
+                    obstacle = {
+                        "shape": "circle",
+                        "pos": pos,
+                        "radius": float(self.np_random.uniform(0.5, 1.3)),
+                    }
 
                 # Keep obstacles away from robot start and target
-                if self._distance(pos, robot) < radius + self.robot_radius + 1.5:
+                bound = self._obstacle_bounding_radius(obstacle)
+                if self._distance(pos, robot) < bound + self.robot_radius + 1.5:
                     continue
-                if self._distance(pos, target) < radius + self.target_radius + 1.5:
+                if self._distance(pos, target) < bound + self.target_radius + 1.5:
                     continue
 
-                # Avoid overlap with existing obstacles
+                # Avoid overlap with existing obstacles (conservative: use
+                # bounding circles for the separation test)
                 valid = True
-                for existing_pos, existing_radius in obstacles:
+                for existing in obstacles:
+                    existing_bound = self._obstacle_bounding_radius(existing)
                     if (
-                        self._distance(pos, existing_pos)
-                        < radius + existing_radius + 0.5
+                        self._distance(pos, existing["pos"])
+                        < bound + existing_bound + 0.5
                     ):
                         valid = False
                         break
 
                 if valid:
-                    obstacles.append((pos, radius))
+                    obstacles.append(obstacle)
                     placed = True
                     break
 
@@ -339,6 +372,87 @@ class RobotNavigationEnv(gym.Env):
                 return None
 
         return obstacles
+
+    # ------------------------------------------------------------------
+    # Shape helpers
+    # ------------------------------------------------------------------
+    def _obstacle_bounding_radius(self, obstacle):
+        """Radius of the circle that fully contains an obstacle."""
+        if obstacle.get("shape") == "rect":
+            return 0.5 * math.hypot(obstacle["width"], obstacle["height"])
+        return float(obstacle["radius"])
+
+    def _to_local(self, point, obstacle):
+        """Transform a world point into a rectangle obstacle's local frame."""
+        c = math.cos(-obstacle["angle"])
+        s = math.sin(-obstacle["angle"])
+        d = np.asarray(point, dtype=np.float64) - np.asarray(
+            obstacle["pos"], dtype=np.float64
+        )
+        return np.array([c * d[0] - s * d[1], s * d[0] + c * d[1]])
+
+    def _robot_hits_obstacle(self, point, obstacle):
+        """Whether a disc of radius robot_radius at `point` overlaps an obstacle."""
+        if obstacle.get("shape") == "rect":
+            local = self._to_local(point, obstacle)
+            half_w = 0.5 * obstacle["width"] + self.robot_radius
+            half_h = 0.5 * obstacle["height"] + self.robot_radius
+            return abs(local[0]) < half_w and abs(local[1]) < half_h
+
+        distance = self._distance(point, obstacle["pos"])
+        return distance < self.robot_radius + obstacle["radius"]
+
+    def _rect_ray_distance(self, origin, direction, obstacle):
+        """Distance along a ray (origin, direction) to an inflated rectangle.
+
+        The rectangle is inflated by the robot radius (Minkowski expansion in
+        the rect's local frame); returns sensor_range if the ray misses.
+        """
+        local_origin = self._to_local(origin, obstacle)
+        c = math.cos(-obstacle["angle"])
+        s = math.sin(-obstacle["angle"])
+        local_dir = np.array(
+            [
+                c * direction[0] - s * direction[1],
+                s * direction[0] + c * direction[1],
+            ]
+        )
+
+        half_w = 0.5 * obstacle["width"] + self.robot_radius
+        half_h = 0.5 * obstacle["height"] + self.robot_radius
+
+        eps = 1e-8
+
+        t_min = -float("inf")
+        t_max = float("inf")
+
+        for axis in range(2):
+            half = half_w if axis == 0 else half_h
+            o = local_origin[axis]
+            d = local_dir[axis]
+
+            if abs(d) < eps:
+                # Ray parallel to this slab pair: must start inside it
+                if abs(o) > half:
+                    return self.sensor_range
+                continue
+
+            t1 = (-half - o) / d
+            t2 = (half - o) / d
+            if t1 > t2:
+                t1, t2 = t2, t1
+
+            t_min = max(t_min, t1)
+            t_max = min(t_max, t2)
+
+            if t_min > t_max:
+                return self.sensor_range
+
+        # Starting inside the inflated rectangle -> touching
+        if t_min <= 0.0:
+            return 0.0
+
+        return float(min(t_min, self.sensor_range))
 
     def _path_exists(self, robot, target, obstacles):
         resolution = 1.0
@@ -348,34 +462,27 @@ class RobotNavigationEnv(gym.Env):
 
         grid = np.zeros((n, n), dtype=bool)
 
-        # Mark occupied cells
-        for obstacle_pos, obstacle_radius in obstacles:
-            inflated_radius = obstacle_radius + self.robot_radius + 0.1
+        # Mark occupied cells (shape-aware, inflated by the robot radius)
+        for obstacle in obstacles:
+            inflated = self.robot_radius + 0.1
 
-            x_min = max(
-                0, int((obstacle_pos[0] - inflated_radius + self.half) / resolution)
-            )
-            x_max = min(
-                n - 1,
-                int((obstacle_pos[0] + inflated_radius + self.half) / resolution),
-            )
-            y_min = max(
-                0, int((obstacle_pos[1] - inflated_radius + self.half) / resolution)
-            )
-            y_max = min(
-                n - 1,
-                int((obstacle_pos[1] + inflated_radius + self.half) / resolution),
-            )
+            bound = self._obstacle_bounding_radius(obstacle) + inflated
+            pos = obstacle["pos"]
+
+            x_min = max(0, int((pos[0] - bound + self.half) / resolution))
+            x_max = min(n - 1, int((pos[0] + bound + self.half) / resolution))
+            y_min = max(0, int((pos[1] - bound + self.half) / resolution))
+            y_max = min(n - 1, int((pos[1] + bound + self.half) / resolution))
 
             for y in range(y_min, y_max + 1):
                 for x in range(x_min, x_max + 1):
                     cell_x = x * resolution - self.half + resolution / 2.0
                     cell_y = y * resolution - self.half + resolution / 2.0
 
-                    dx = cell_x - obstacle_pos[0]
-                    dy = cell_y - obstacle_pos[1]
-
-                    if dx * dx + dy * dy <= inflated_radius * inflated_radius:
+                    if self._robot_hits_obstacle(
+                        np.array([cell_x, cell_y]),
+                        obstacle,
+                    ):
                         grid[y, x] = True
 
         def to_grid(point):
@@ -514,9 +621,16 @@ class RobotNavigationEnv(gym.Env):
         t = min(t, tx, ty)
 
         # Distance to obstacles
-        for obstacle_pos, obstacle_radius in self.obstacles:
-            inflated_radius = obstacle_radius + self.robot_radius
-            oc = self.robot_pos - obstacle_pos
+        for obstacle in self.obstacles:
+            if obstacle.get("shape") == "rect":
+                t = min(
+                    t,
+                    self._rect_ray_distance(self.robot_pos, direction, obstacle),
+                )
+                continue
+
+            inflated_radius = obstacle["radius"] + self.robot_radius
+            oc = self.robot_pos - obstacle["pos"]
 
             c = float(np.dot(oc, oc) - inflated_radius * inflated_radius)
 

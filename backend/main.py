@@ -307,6 +307,69 @@ def get_checkpoints():
     return training.checkpoint_info()
 
 
+@app.post("/api/env/test")
+def test_environment(payload: dict):
+    """Instantiate an environment from a flat config and probe it.
+
+    Body: a flat training config (the same shape the Setup page submits) or a
+    ready ``environment`` section.  Returns the observed spec (obs dim, action
+    count, sample obstacle layout) so the UI can validate a custom environment
+    source (builtin v1/v2 or an external module) before training on it.
+    """
+    from rl.frames import serialize_obstacles
+
+    source = payload.get("env_source") or payload.get("source") or "builtin"
+    module = payload.get("env_module") or payload.get("module") or None
+
+    if source == "module" and not module:
+        raise HTTPException(
+            status_code=400,
+            detail="External environment selected but no module path given.",
+        )
+
+    try:
+        env = env_factory.create_env(payload)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Failed to create env: {exc}")
+
+    try:
+        obs, info = env.reset(seed=0)
+        sample_steps = []
+        for _ in range(3):
+            action = int(env.action_space.sample())
+            obs, reward, terminated, truncated, info = env.step(action)
+            sample_steps.append({
+                "action": action,
+                "reward": float(reward),
+                "terminated": bool(terminated),
+            })
+            if terminated or truncated:
+                obs, info = env.reset(seed=1)
+
+        action_space = env.action_space
+        n_actions = getattr(action_space, "n", None)
+        obs_shape = list(getattr(env.observation_space, "shape", []))
+
+        obstacles = serialize_obstacles(getattr(env, "obstacles", None))
+
+        return {
+            "ok": True,
+            "source": source,
+            "module": module,
+            "env_class": type(env).__name__,
+            "obs_dim": int(obs_shape[0]) if obs_shape else int(np.asarray(obs).size),
+            "obs_shape": obs_shape,
+            "n_actions": int(n_actions) if n_actions is not None else None,
+            "world_size": float(getattr(env, "world_size", 0.0) or 0.0),
+            "num_obstacles": len(obstacles),
+            "obstacle_shapes": sorted({o["shape"] for o in obstacles}) or [],
+            "obstacles": obstacles,
+            "sample_steps": sample_steps,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Env probe failed: {exc}")
+
+
 @app.post("/api/live/toggle")
 def toggle_live_view(payload: dict):
     """Enable or disable live frame streaming from the active training/eval job."""

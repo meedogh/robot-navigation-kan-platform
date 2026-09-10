@@ -1,3 +1,0 @@
-model_type,n_seeds,n_episodes_final_eval,success_rate,success_ci_low,success_ci_high,success_rate_seed_std,mean_reward,std_reward,collision_rate,reward_diff_vs_kan,permutation_p_value
-mlp,1,10,0.4,0.1,0.7,0.0,18.914212107419953,110.14279293094278,0.6,-82.96248577165602,0.1374312843578211
-kan,1,10,0.8,0.5,1.0,0.0,101.87669787907598,98.88376771608507,0.2,82.96248577165602,0.1374312843578211

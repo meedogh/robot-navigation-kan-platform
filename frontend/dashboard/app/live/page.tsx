@@ -48,13 +48,25 @@ export default function Live() {
       ctx.beginPath(); ctx.moveTo(0, p); ctx.lineTo(SIZE, p); ctx.stroke();
     }
 
-    // obstacles (v2 env has multiple obstacles with different radii)
+    // obstacles (v2 env has multiple obstacles with different shapes)
     ctx.fillStyle = "#ff5c7a";
     for (const ob of frame.obstacles ?? []) {
-      const r = Math.max(5, ob.radius * (SIZE / world));
-      ctx.beginPath();
-      ctx.arc(toCanvas(ob.x, world), toCanvas(ob.y, world), r, 0, Math.PI * 2);
-      ctx.fill();
+      const scale = SIZE / world;
+      if (ob.shape === "rect" && typeof ob.width === "number") {
+        // Rotated rectangle obstacle
+        ctx.save();
+        ctx.translate(toCanvas(ob.x, world), toCanvas(ob.y, world));
+        ctx.rotate(-(ob.angle ?? 0));
+        const w = Math.max(4, ob.width * scale);
+        const h = Math.max(4, ob.height * scale);
+        ctx.fillRect(-w / 2, -h / 2, w, h);
+        ctx.restore();
+      } else {
+        const r = Math.max(5, ob.radius * (SIZE / world));
+        ctx.beginPath();
+        ctx.arc(toCanvas(ob.x, world), toCanvas(ob.y, world), r, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
 
     // target

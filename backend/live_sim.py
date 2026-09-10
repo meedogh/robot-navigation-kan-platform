@@ -6,6 +6,7 @@ import torch
 
 from simulation.env_factory import create_env
 from rl.config_io import env_config_from_checkpoint_dir
+from rl.frames import serialize_obstacles
 from rl.model_factory import create_qnetwork_from_arch, load_arch
 
 
@@ -79,14 +80,7 @@ class LiveSimulator:
         # renders whatever is present).
         robot_pos = getattr(self.env, "robot_pos", None)
         target_pos = getattr(self.env, "target_pos", None)
-        obstacles = [
-            {
-                "x": float(pos[0]),
-                "y": float(pos[1]),
-                "radius": float(radius),
-            }
-            for pos, radius in (getattr(self.env, "obstacles", None) or [])
-        ]
+        obstacles = serialize_obstacles(getattr(self.env, "obstacles", None))
 
         frame = {
             "model": self.model_type,

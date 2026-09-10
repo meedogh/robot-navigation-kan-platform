@@ -22,6 +22,7 @@ import socket
 import threading
 from typing import Any, Dict, Optional
 
+from rl.frames import serialize_obstacles
 from my_adapters.bridge_protocol import (
     DEFAULT_PORT,
     PROTOCOL_VERSION,
@@ -54,9 +55,13 @@ def _state_payload(
         "robot_pos": [float(env.robot_pos[0]), float(env.robot_pos[1])],
         "robot_angle": float(env.robot_angle),
         "target_pos": [float(env.target_pos[0]), float(env.target_pos[1])],
+        # Bridge protocol v1 wire format: [[x, y, radius]] bounding circles
+        # (protocol docs: my_adapters/bridge_protocol.py).  Rect obstacles use
+        # their bounding-circle radius; full shape data only flows through the
+        # platform's own live-view frames (rl.frames).
         "obstacles": [
-            [float(pos[0]), float(pos[1]), float(radius)]
-            for pos, radius in env.obstacles
+            [o["x"], o["y"], o["radius"]]
+            for o in serialize_obstacles(env.obstacles)
         ],
     }
 
