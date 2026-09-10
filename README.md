@@ -20,11 +20,12 @@ A **FastAPI** backend serves training results, a KAN explainability endpoint, an
 │   ├── dqn/                     # custom DQN agent + replay buffer
 │   ├── policies/                # MLP & KAN Q-networks (+ KAN layer implementation)
 │   ├── train_custom_dqn.py      # ★ main training entry point (MLP or KAN) - config-driven, cancellable
+│   ├── run_seeds.py             # ★ multi-seed sweep runner (resumable, writes seed_summary.csv)
 │   ├── config_io.py             # ★ portable run-config export / import (CLI + schema)
 │   ├── train_dqn_baseline.py    # stable-baselines3 DQN baseline
 │   ├── evaluate_agent.py        # evaluate the SB3 baseline
 │   ├── evaluate_saved_models.py # evaluate all saved custom checkpoints
-│   ├── compare_agents.py        # plot MLP vs KAN comparison
+│   ├── compare_agents.py        # seed-aggregated MLP vs KAN comparison + statistics
 │   └── model_factory.py         # central Q-network factory (keeps architectures consistent)
 ├── backend/                     # FastAPI app (results API, KAN explainer, live WS sim)
 ├── frontend/dashboard/          # Next.js dashboard (Overview / Training / Live / Explain)
@@ -89,6 +90,7 @@ Outputs:
 | --- | --- |
 | `experiments/checkpoints/custom_dqn_{mlp,kan}.pt` / `..._best.pt` | final / best checkpoints |
 | `experiments/results/custom_dqn_{mlp,kan}_train_log.csv` | evaluation log every N steps |
+| `experiments/results/custom_dqn_{mlp,kan}_eval_episodes.csv` | raw per-episode evaluation results (used by the statistics) |
 
 Optional extras — SB3 baseline and analysis:
 
@@ -96,8 +98,36 @@ Optional extras — SB3 baseline and analysis:
 python -m rl.train_dqn_baseline       # trains experiments/checkpoints/dqn_mlp_baseline (SB3)
 python -m rl.evaluate_agent           # evaluates the SB3 baseline
 python -m rl.evaluate_saved_models    # evaluates every saved custom checkpoint (100 episodes)
-python -m rl.compare_agents           # renders experiments/results/mlp_vs_kan_comparison.png
+python -m rl.run_seeds                # multi-seed sweep (see next section)
+python -m rl.compare_agents           # seed-aggregated curves + statistics
 ```
+
+Useful training flags: `--loss-type {huber,smooth_l1,mse}` and `--huber-delta`
+(default: `huber`, robust to the ±100 terminal rewards).
+
+### Multi-seed experiments (thesis-grade statistics)
+
+A single RL run is noisy: the same configuration can produce very different
+policies depending on the random seed. For the MLP vs KAN claim, sweep several
+seeds and compare distributions instead of single numbers:
+
+```powershell
+python -m rl.run_seeds                # 5 default seeds x {mlp, kan}, resumable
+python -m rl.compare_agents           # aggregated curves + statistical tests
+```
+
+- `rl.run_seeds` stores each run under `experiments/checkpoints/seed_runs/seed_<s>/`
+  and `experiments/results/seed_runs/seed_<s>/`, appends to
+  `experiments/results/seed_runs/seed_summary.csv`, and **skips** (model, seed)
+  pairs whose final checkpoint already exists — interrupt and re-run freely.
+  Useful flags: `--models kan --seeds 42 123 2024 --total-steps 300000
+  --eval-episodes 30`, plus `--config <flat/run-config JSON>` for environment
+  and hyperparameter overrides.
+- `rl.compare_agents` plots reward / success curves with ± std bands across
+  seeds and writes `experiments/results/seed_comparison_stats.csv`: pooled
+  success rate with a bootstrap 95% CI, per-seed std, collision rate, and a
+  two-sided permutation test on the pooled final-evaluation episode returns
+  (non-parametric, no scipy needed — appropriate for the bimodal returns).
 
 ## Portable run configs (export / import)
 
@@ -306,7 +336,7 @@ python -m rl.model_export --model mlp          # or --model kan
 
 | Dashboard | API |
 | --- | --- |
-| *(download via the endpoint directly)* | `GET /api/model/export/{mlp\|kan}` |
+| Results page → **Export Models (ONNX)** buttons (MLP / KAN) | `GET /api/model/export/{mlp\|kan}` |
 
 The exported graph (input `observations` → output `q_values`, dynamic batch
 axis) runs inside Unity via **Microsoft Sentis**, or any ONNX runtime — a
@@ -347,7 +377,7 @@ Health check: <http://127.0.0.1:8000/> · Interactive docs: <http://127.0.0.1:80
 | `POST /api/config/export` | flat config in → portable run-config JSON download |
 | `POST /api/config/import` | run config JSON in → validated flat config + warnings |
 | `GET /api/config/export/{mlp\|kan}` | last run config as a downloadable run-config file |
-| `GET /api/model/export/{mlp\|kan}` | best checkpoint as an ONNX download (Unity Sentis-ready) |
+| `GET /api/model/export/{mlp\|kan}` | best checkpoint as an ONNX download (Unity Sentis-ready) — also the Results page → Export Models (ONNX) buttons |
 | `POST /api/training/start` | start a background training job `{"config": {...}}` |
 | `GET /api/training/status` | current job status + live/training busy flag |
 | `GET /api/training/progress` | evaluation rows collected so far |
@@ -375,7 +405,7 @@ Open <http://localhost:3000>. Pages:
 | `/live` | Real-time agent simulation over WebSocket |
 | `/explain` | KAN explainability — feature importance & learned functions |
 | `/setup` | Setup and Train — tweak training/evaluation parameters and start a run |
-| `/results` | Results — live training progress, saved checkpoints, final evaluation + run evaluation |
+| `/results` | Results — live training progress, saved checkpoints, final evaluation, run evaluation + ONNX model export |
 
 Production build:
 
@@ -386,8 +416,8 @@ npm start
 
 To point the dashboard at a different backend, set `NEXT_PUBLIC_API_URL` in
 `frontend/dashboard/.env.local` (e.g. `NEXT_PUBLIC_API_URL=http://127.0.0.1:8000`).
-The **Live Simulation** page's WebSocket URL is hardcoded to `ws://127.0.0.1:8000/ws/live`
-in `app/live/page.tsx` — edit it there if you change ports.
+Both the REST base URL and the **Live Simulation** page's WebSocket URL derive
+from `NEXT_PUBLIC_API_URL` (the http(s) scheme is converted to ws(s) automatically).
 
 ## Quick start (two terminals)
 
@@ -413,8 +443,10 @@ Then open <http://localhost:3000>.
   `experiments/checkpoints/`. Train one first (see step 2).
 - **Backend not reachable from the dashboard** — make sure uvicorn is on port 8000;
   CORS is already open (`allow_origins=["*"]`).
-- **Empty training scripts?** `rl/train_kan_custom.py` and `rl/train_mlp_custom.py` are
-  empty placeholders — use `rl/train_custom_dqn.py` for both models.
+- **Old v1 checkpoints behave oddly or won't load** — the v1 environment's
+  front/left/right observations were fixed to true raycast sector distances in
+  [0, 1] (matching the v2 implementation), which changes the observation
+  semantics. Retrain any v1 models; v2 checkpoints are unaffected.
 - **Missing `frontend/dashboard/lib/` after cloning** — older `.gitignore` versions had a
   Python `lib/` rule that excluded it; the negation at the end of `.gitignore` now keeps
   it tracked.

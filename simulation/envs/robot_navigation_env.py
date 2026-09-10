@@ -5,7 +5,12 @@ from gymnasium import spaces
 
 class RobotNavigationEnv(gym.Env):
     """
-    Simple robot navigation environment.
+    Simple robot navigation environment (V1).
+
+    NOTE: as of the sensor fix, front/left/right observations are true
+    raycast-style sector distances in [0, 1] (like the v2 environment).
+    Checkpoints trained on the *old* v1 implementation are NOT compatible
+    with this observation layout - retrain any v1 models.
 
     Actions:
         0 = move forward
@@ -16,11 +21,14 @@ class RobotNavigationEnv(gym.Env):
 
     metadata = {"render_modes": ["human"]}
 
-    def __init__(self, max_steps=200):
+    def __init__(self, max_steps=200, sensor_range=3.0):
         super().__init__()
 
         self.max_steps = max_steps
         self.current_step = 0
+
+        # Maximum distance the raycast sensors can see (normalized to [0, 1])
+        self.sensor_range = float(sensor_range)
 
         # forward, left, right, stop
         self.action_space = spaces.Discrete(4)
@@ -154,11 +162,12 @@ class RobotNavigationEnv(gym.Env):
 
         angle_to_target = self._angle_to_target()
 
-        obstacle_distance = self._distance(self.robot_pos, self.obstacle_pos)
-
-        front_obstacle = obstacle_distance
-        left_obstacle = obstacle_distance
-        right_obstacle = obstacle_distance
+        # Raycast-style sector sensors (front / left / right), each the minimum
+        # ray distance over a small angular sector, normalized to [0, 1] where
+        # 0 = touching and 1 = nothing within sensor_range.
+        front_sensor = self._sector_distance(0.0)
+        left_sensor = self._sector_distance(np.pi / 2.0)
+        right_sensor = self._sector_distance(-np.pi / 2.0)
 
         obs = np.array([
             self.robot_pos[0],
@@ -168,9 +177,9 @@ class RobotNavigationEnv(gym.Env):
             self.target_pos[1],
             distance_to_target,
             angle_to_target,
-            front_obstacle,
-            left_obstacle,
-            right_obstacle
+            front_sensor,
+            left_sensor,
+            right_sensor
         ], dtype=np.float32)
 
         return obs
@@ -227,3 +236,75 @@ class RobotNavigationEnv(gym.Env):
     def _check_collision(self):
         distance_to_obstacle = self._distance(self.robot_pos, self.obstacle_pos)
         return distance_to_obstacle < (self.robot_radius + self.obstacle_radius)
+
+    # ------------------------------------------------------------------
+    # Sensors (raycast-style, same approach as the v2 environment)
+    # ------------------------------------------------------------------
+    def _sector_distance(self, center_relative_angle, spread=np.pi / 3.0):
+        angles = np.linspace(
+            center_relative_angle - spread / 2.0,
+            center_relative_angle + spread / 2.0,
+            5,
+        )
+
+        distances = [self._ray_distance(float(angle)) for angle in angles]
+
+        min_distance = min(distances)
+        return float(np.clip(min_distance / self.sensor_range, 0.0, 1.0))
+
+    def _ray_distance(self, relative_angle):
+        angle = self.robot_angle + relative_angle
+        direction = np.array(
+            [np.cos(angle), np.sin(angle)],
+            dtype=np.float32,
+        )
+
+        half = self.world_size / 2.0
+        eps = 1e-8
+
+        # Distance to walls
+        tx = float("inf")
+        ty = float("inf")
+
+        if direction[0] > eps:
+            tx = (half - self.robot_pos[0]) / direction[0]
+        elif direction[0] < -eps:
+            tx = (-half - self.robot_pos[0]) / direction[0]
+
+        if direction[1] > eps:
+            ty = (half - self.robot_pos[1]) / direction[1]
+        elif direction[1] < -eps:
+            ty = (-half - self.robot_pos[1]) / direction[1]
+
+        if tx < 0:
+            tx = float("inf")
+        if ty < 0:
+            ty = float("inf")
+
+        t = min(self.sensor_range, tx, ty)
+
+        # Distance to the obstacle
+        inflated_radius = self.obstacle_radius + self.robot_radius
+        oc = self.robot_pos - self.obstacle_pos
+
+        c = float(np.dot(oc, oc) - inflated_radius * inflated_radius)
+
+        # Already inside the inflated obstacle radius
+        if c <= 0.0:
+            return 0.0
+
+        b = 2.0 * float(np.dot(oc, direction))
+        discriminant = b * b - 4.0 * c
+
+        if discriminant >= 0.0:
+            sqrt_discriminant = np.sqrt(discriminant)
+            t1 = (-b - sqrt_discriminant) / 2.0
+
+            if t1 > 0.0:
+                t = min(t, t1)
+            else:
+                t2 = (-b + sqrt_discriminant) / 2.0
+                if t2 > 0.0:
+                    t = min(t, t2)
+
+        return float(np.clip(t, 0.0, self.sensor_range))

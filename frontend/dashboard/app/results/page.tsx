@@ -12,7 +12,7 @@ import {
   CartesianGrid,
   ResponsiveContainer,
 } from "recharts";
-import { getJSON, postJSON } from "../../lib/api";
+import { downloadFile, getJSON, postJSON } from "../../lib/api";
 
 type Row = {
   model_name?: string;
@@ -51,6 +51,9 @@ export default function Results() {
   const [seedBase, setSeedBase] = useState("999999");
   const [checkpoints, setCheckpoints] = useState<any[]>([]);
   const [liveEval, setLiveEval] = useState(true);
+  const [exporting, setExporting] = useState<"" | "mlp" | "kan">("");
+  const [exportMessage, setExportMessage] = useState("");
+  const [exportOk, setExportOk] = useState(false);
 
   const loadFinal = useCallback(async () => {
     try {
@@ -145,6 +148,23 @@ async function startEvaluation() {
       await postJSON("/api/training/stop");
     } catch (e: any) {
       setError(e.message);
+    }
+  }
+
+  async function exportOnnx(model: "mlp" | "kan") {
+    setExporting(model);
+    setExportMessage("");
+    const result = await downloadFile(
+      `/api/model/export/${model}`,
+      `custom_dqn_${model}_best.onnx`
+    );
+    setExporting("");
+    if (result.ok) {
+      setExportOk(true);
+      setExportMessage(`Downloaded ${result.filename ?? "model.onnx"}`);
+    } else {
+      setExportOk(false);
+      setExportMessage(result.error ?? "Export failed");
     }
   }
 
@@ -332,6 +352,28 @@ async function startEvaluation() {
               ))}
             </tbody>
           </table>
+        )}
+      </div>
+
+      <div className="card">
+        <h2>Export Models (ONNX)</h2>
+        <p className="muted">
+          Download the best checkpoint of each architecture as an ONNX graph
+          (input <code>observations</code> → output <code>q_values</code>,
+          dynamic batch axis) ready for Unity Sentis or any ONNX runtime.
+        </p>
+        <div className="actions">
+          <button onClick={() => exportOnnx("mlp")} disabled={exporting !== ""}>
+            {exporting === "mlp" ? "Exporting MLP..." : "Export MLP (ONNX)"}
+          </button>
+          <button onClick={() => exportOnnx("kan")} disabled={exporting !== ""}>
+            {exporting === "kan" ? "Exporting KAN..." : "Export KAN (ONNX)"}
+          </button>
+        </div>
+        {exportMessage && (
+          <p style={{ color: exportOk ? "#38d39f" : "#ff5c7a", marginTop: 8 }}>
+            {exportMessage}
+          </p>
         )}
       </div>
 

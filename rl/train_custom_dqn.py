@@ -35,6 +35,10 @@ DEFAULT_TRAINING_CONFIG: Dict[str, Any] = {
     "epsilon_decay_steps": 50_000,
     "target_update_interval": 500,
 
+    # loss
+    "loss_type": "huber",
+    "huber_delta": 1.0,
+
     # network architecture
     "mlp_hidden_dim": 64,
     "kan_hidden_dim": 32,
@@ -70,6 +74,7 @@ _INT_KEYS = {
 _FLOAT_KEYS = {
     "learning_rate", "gamma",
     "epsilon_start", "epsilon_end", "kan_grid_range",
+    "huber_delta",
     "env_world_size", "env_sensor_range",
     "env_robot_radius", "env_target_radius", "env_max_speed", "env_turn_angle_deg",
 }
@@ -110,6 +115,10 @@ def validate_training_config(raw: Optional[Dict[str, Any]] = None) -> Dict[str, 
         raise ValueError("learning_rate must be > 0")
     if not (0.0 < config["gamma"] < 1.0):
         raise ValueError("gamma must be in (0, 1)")
+    if config["loss_type"] not in ("huber", "smooth_l1", "mse"):
+        raise ValueError("loss_type must be 'huber', 'smooth_l1' or 'mse'")
+    if config["huber_delta"] <= 0.0:
+        raise ValueError("huber_delta must be > 0")
     if config["env_max_obstacles"] < config["env_min_obstacles"]:
         raise ValueError("env_max_obstacles must be >= env_min_obstacles")
     if config["env_world_size"] <= 2.0:
@@ -125,13 +134,15 @@ def evaluate_agent(
     seed_base=None,
     frame_callback=None,
     model_type: str = "unknown",
-    phase: str = "evaluation"
+    phase: str = "evaluation",
+    collect_episodes: bool = False,
 ):
     rewards = []
     successes = []
     collisions = []
     steps_list = []
     final_distances = []
+    episode_rows = []
 
     for ep in range(episodes):
         if seed_base is not None:
@@ -175,6 +186,17 @@ def evaluate_agent(
         steps_list.append(episode_steps)
         final_distances.append(float(info.get("distance_to_target", float("nan"))))
 
+        episode_rows.append({
+            "model_type": model_type,
+            "episode": ep,
+            "eval_seed": (seed_base + ep) if seed_base is not None else None,
+            "reward": episode_reward,
+            "success": bool(info.get("reached_target", False)),
+            "collision": bool(info.get("collision", False)),
+            "steps": episode_steps,
+            "final_distance": float(info.get("distance_to_target", float("nan"))),
+        })
+
     metrics = {
         "mean_reward": float(np.mean(rewards)),
         "std_reward": float(np.std(rewards)),
@@ -184,6 +206,8 @@ def evaluate_agent(
         "mean_final_distance": float(np.nanmean(final_distances)),
     }
 
+    if collect_episodes:
+        return metrics, episode_rows
     return metrics
 
 
@@ -287,6 +311,7 @@ def train(
     obs, _ = env.reset(seed=seed)
 
     logs = []
+    episode_log = []
     last_frame_time = 0.0
     live_episode_reward = 0.0
     live_episode_steps = 0
@@ -355,7 +380,7 @@ def train(
             })
 
         if step % eval_every == 0:
-            metrics = evaluate_agent(
+            metrics, eval_rows = evaluate_agent(
                 agent,
                 eval_env,
                 episodes=eval_episodes,
@@ -363,7 +388,11 @@ def train(
                 frame_callback=frame_callback,
                 model_type=model_type,
                 phase="evaluation",
+                collect_episodes=True,
             )
+            for row in eval_rows:
+                row["training_step"] = step
+                episode_log.append(row)
 
             row = {
                 "model_type": model_type,
@@ -408,7 +437,7 @@ def train(
                 )
 
     if not stopped:
-        final_metrics = evaluate_agent(
+        final_metrics, final_eval_rows = evaluate_agent(
             agent,
             eval_env,
             episodes=eval_episodes,
@@ -416,7 +445,11 @@ def train(
             frame_callback=frame_callback,
             model_type=model_type,
             phase="evaluation",
+            collect_episodes=True,
         )
+        for row in final_eval_rows:
+            row["training_step"] = total_steps
+            episode_log.append(row)
 
         final_row = {
             "model_type": model_type,
@@ -449,15 +482,24 @@ def train(
     else:
         csv_path = None
 
+    episodes_csv_path = None
+    if episode_log:
+        episodes_df = pd.DataFrame(episode_log)
+        episodes_csv_path = results_dir / f"custom_dqn_{model_type}_eval_episodes.csv"
+        episodes_df.to_csv(episodes_csv_path, index=False)
+
     print(f"Model saved to: {model_path}")
     if csv_path:
         print(f"Training log saved to: {csv_path}")
+    if episodes_csv_path:
+        print(f"Per-episode evaluation log saved to: {episodes_csv_path}")
 
     return {
         "status": "stopped" if stopped else "completed",
         "model_type": model_type,
         "model_path": str(model_path),
         "log_path": str(csv_path) if csv_path else None,
+        "episodes_log_path": str(episodes_csv_path) if episodes_csv_path else None,
         "config_path": str(config_path),
         "rows_logged": len(logs),
     }
@@ -517,6 +559,21 @@ if __name__ == "__main__":
         default=None
     )
 
+    parser.add_argument(
+        "--loss-type",
+        type=str,
+        default=None,
+        choices=["huber", "smooth_l1", "mse"],
+        help="DQN loss (default: huber, robust to the ±100 terminal rewards)"
+    )
+
+    parser.add_argument(
+        "--huber-delta",
+        type=float,
+        default=None,
+        help="Point where the huber/smooth-l1 loss turns quadratic (default: 1.0)"
+    )
+
     args = parser.parse_args()
 
     # 1) Start from the run config file (if any), 2) apply explicitly given
@@ -548,6 +605,10 @@ if __name__ == "__main__":
         cli_overrides["eval_every"] = args.eval_every
     if args.eval_episodes is not None:
         cli_overrides["eval_episodes"] = args.eval_episodes
+    if args.loss_type is not None:
+        cli_overrides["loss_type"] = args.loss_type
+    if args.huber_delta is not None:
+        cli_overrides["huber_delta"] = args.huber_delta
     config = {**config, **cli_overrides}
 
     if args.export_config is not None:

@@ -2,6 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 
+// Derive the WebSocket URL from NEXT_PUBLIC_API_URL (same default as lib/api.ts),
+// converting the http(s) scheme to ws(s).
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
+const WS_BASE_URL = API_BASE_URL.replace(/^http/, "ws");
+
 const SIZE = 560;
 const WORLD = 20; // matches env v2 world_size; coords range [-WORLD/2, WORLD/2]
 
@@ -91,7 +96,7 @@ export default function Live() {
   function connect() {
     disconnect();
     setStatus("connecting");
-    const ws = new WebSocket("ws://127.0.0.1:8000/ws/live");
+    const ws = new WebSocket(`${WS_BASE_URL}/ws/live`);
     wsRef.current = ws;
 
     ws.onopen = () => {

@@ -78,6 +78,16 @@ const FIELD_GROUPS: { title: string; fields: FieldDef[] }[] = [
       { key: "epsilon_end", label: "Epsilon end", type: "float", min: 0, max: 1, step: 0.05 },
       { key: "epsilon_decay_steps", label: "Epsilon decay steps", type: "int", min: 1 },
       { key: "target_update_interval", label: "Target update interval", type: "int", min: 1 },
+      {
+        key: "loss_type", label: "Loss", type: "select",
+        options: [
+          { value: "huber", label: "Huber (recommended)" },
+          { value: "smooth_l1", label: "Smooth L1" },
+          { value: "mse", label: "MSE (legacy)" },
+        ],
+        hint: "Huber is robust to the ±100 terminal rewards of this environment",
+      },
+      { key: "huber_delta", label: "Huber delta", type: "float", min: 0.001, step: 0.5, hint: "Point where the loss turns quadratic" },
     ],
   },
   {

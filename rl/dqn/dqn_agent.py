@@ -40,6 +40,11 @@ class DQNAgent:
 
         self.target_update_interval = int(cfg.get("target_update_interval", target_update_interval))
 
+        # Loss: "huber" (default, robust to the ±100 terminal rewards),
+        # "smooth_l1", or "mse" (legacy behaviour).
+        self.loss_type = str(cfg.get("loss_type", "huber")).lower()
+        self.huber_delta = float(cfg.get("huber_delta", 1.0))
+
         self.device = torch.device(device)
 
         self.policy = create_qnetwork(
@@ -111,7 +116,16 @@ class DQNAgent:
             1, actions.unsqueeze(1)
         ).squeeze(1)
 
-        loss = torch.nn.functional.mse_loss(current_q_values, target_q_values)
+        if self.loss_type == "mse":
+            loss = torch.nn.functional.mse_loss(current_q_values, target_q_values)
+        elif self.loss_type == "smooth_l1":
+            loss = torch.nn.functional.smooth_l1_loss(
+                current_q_values, target_q_values, beta=self.huber_delta
+            )
+        else:  # "huber" (default)
+            loss = torch.nn.functional.huber_loss(
+                current_q_values, target_q_values, delta=self.huber_delta
+            )
 
         self.optimizer.zero_grad()
         loss.backward()

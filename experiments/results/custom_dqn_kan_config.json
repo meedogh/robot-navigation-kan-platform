@@ -1,5 +1,5 @@
 {
-  "model_type": "mlp",
+  "model_type": "kan",
   "total_steps": 300000,
   "seed": 42,
   "eval_every": 10000,
@@ -25,10 +25,10 @@
   "env_min_obstacles": 3,
   "env_max_obstacles": 6,
   "env_sensor_range": 12.0,
-  "env_robot_radius": 0.51,
+  "env_robot_radius": 0.35,
   "env_target_radius": 0.8,
   "env_max_speed": 0.35,
-  "env_turn_angle_deg": 41.0,
+  "env_turn_angle_deg": 30.0,
   "env_source": "builtin",
   "env_variant": "v2",
   "env_module": ""
