@@ -15,6 +15,12 @@ function toCanvas(v: number, world: number) {
   return ((v + world / 2) / world) * SIZE;
 }
 
+// Y mapping with the world's +y rendered upward (the world uses y-up math;
+// without the flip the robot's heading would be mirrored against its motion).
+function toCanvasY(v: number, world: number) {
+  return SIZE - ((v + world / 2) / world) * SIZE;
+}
+
 const ACTION_NAMES = [
   "Forward",
   "Forward-Left",
@@ -85,7 +91,7 @@ export default function Live() {
     // target
     ctx.fillStyle = "#38d39f";
     ctx.beginPath();
-    ctx.arc(toCanvas(f.target_x, world), toCanvas(f.target_y, world), 14, 0, Math.PI * 2);
+    ctx.arc(toCanvas(f.target_x, world), toCanvasY(f.target_y, world), 14, 0, Math.PI * 2);
     ctx.fill();
 
     // obstacles (v2/v3 envs have multiple obstacles with different shapes)
@@ -93,7 +99,7 @@ export default function Live() {
     for (const ob of f.obstacles ?? []) {
       if (ob.shape === "rect" && typeof ob.width === "number") {
         ctx.save();
-        ctx.translate(toCanvas(ob.x, world), toCanvas(ob.y, world));
+        ctx.translate(toCanvas(ob.x, world), toCanvasY(ob.y, world));
         ctx.rotate(-(ob.angle ?? 0));
         const w = Math.max(4, ob.width * scale);
         const h = Math.max(4, ob.height * scale);
@@ -102,7 +108,7 @@ export default function Live() {
       } else {
         const r = Math.max(5, ob.radius * scale);
         ctx.beginPath();
-        ctx.arc(toCanvas(ob.x, world), toCanvas(ob.y, world), r, 0, Math.PI * 2);
+        ctx.arc(toCanvas(ob.x, world), toCanvasY(ob.y, world), r, 0, Math.PI * 2);
         ctx.fill();
       }
     }
@@ -115,12 +121,13 @@ export default function Live() {
           : 0.5 * world;
       const angles = [0, (2 * Math.PI) / 3, -(2 * Math.PI) / 3];
       const rx = toCanvas(f.robot_x, world);
-      const ry = toCanvas(f.robot_y, world);
+      const ry = toCanvasY(f.robot_y, world);
       f.sensors.forEach((s, i) => {
         const len = Math.max(2, s * range * scale);
-        const ang = -f.robot_angle + angles[i];
-        const ex = rx + Math.cos(ang) * len;
-        const ey = ry + Math.sin(ang) * len;
+        // Head in the robot's world heading; negate sin for the y-up render.
+        const a = f.robot_angle + angles[i];
+        const ex = rx + Math.cos(a) * len;
+        const ey = ry - Math.sin(a) * len;
         ctx.strokeStyle = s < 0.35 ? "rgba(255,92,122,0.8)" : "rgba(79,140,255,0.45)";
         ctx.lineWidth = 2;
         ctx.beginPath();
@@ -142,15 +149,15 @@ export default function Live() {
         ctx.strokeStyle = `rgba(56,211,159,${alpha})`;
         ctx.lineWidth = 2.5;
         ctx.beginPath();
-        ctx.moveTo(toCanvas(trail[i].x, world), toCanvas(trail[i].y, world));
-        ctx.lineTo(toCanvas(trail[i + 1].x, world), toCanvas(trail[i + 1].y, world));
+        ctx.moveTo(toCanvas(trail[i].x, world), toCanvasY(trail[i].y, world));
+        ctx.lineTo(toCanvas(trail[i + 1].x, world), toCanvasY(trail[i + 1].y, world));
         ctx.stroke();
       }
     }
 
-    // robot (triangle pointing in heading direction)
+    // robot (triangle pointing in heading direction, matching its movement)
     const rx = toCanvas(f.robot_x, world);
-    const ry = toCanvas(f.robot_y, world);
+    const ry = toCanvasY(f.robot_y, world);
     const ang = f.robot_angle;
     ctx.save();
     ctx.translate(rx, ry);

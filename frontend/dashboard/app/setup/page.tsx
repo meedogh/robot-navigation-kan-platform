@@ -335,6 +335,7 @@ export default function Setup() {
 
     const size = 240;
     const toC = (v: number) => ((v + worldSize / 2) / worldSize) * size;
+    const toCY = (v: number) => size - ((v + worldSize / 2) / worldSize) * size;
     const scale = size / worldSize;
 
     ctx.clearRect(0, 0, size, size);
@@ -350,7 +351,7 @@ export default function Setup() {
     for (const o of layoutRows) {
       if (o.shape === "rect") {
         ctx.save();
-        ctx.translate(toC(o.x), toC(o.y));
+        ctx.translate(toC(o.x), toCY(o.y));
         ctx.rotate(-(o.angle ?? 0));
         const w = Math.max(3, (o.width ?? 1) * scale);
         const h = Math.max(3, (o.height ?? 1) * scale);
@@ -358,7 +359,7 @@ export default function Setup() {
         ctx.restore();
       } else {
         ctx.beginPath();
-        ctx.arc(toC(o.x), toC(o.y), Math.max(3, (o.radius ?? 1) * scale), 0, Math.PI * 2);
+        ctx.arc(toC(o.x), toCY(o.y), Math.max(3, (o.radius ?? 1) * scale), 0, Math.PI * 2);
         ctx.fill();
       }
     }
