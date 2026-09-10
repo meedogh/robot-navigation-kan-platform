@@ -411,38 +411,68 @@ async def _stream_active_job(websocket: WebSocket) -> None:
 async def live_simulation(websocket: WebSocket):
     """Stream a live robot navigation episode.
 
-    The client sends either:
-      - {"live": true}          -> stream frames from the active training/eval job
-      - {"model": "mlp"|"kan"}  -> run a saved checkpoint (original behavior)
+    The client sends one of:
+      - {"live": true}              -> stream frames from the active training/eval job
+      - {"model": "mlp"|"kan"}      -> run a saved checkpoint (original behavior)
+      - {"manual": true,            -> YOU drive: send {"action": 0..5} messages
+         "model": "mlp"|"kan",         to step the env; frames include the model's
+         "env_config": {...}}          suggested action + Q-values when a
+                                     checkpoint exists (ghost advice)
     """
     await websocket.accept()
 
     try:
         first_message = await websocket.receive_json()
-        model_type = first_message.get("model", "kan")
-        live_requested = bool(first_message.get("live", False))
     except Exception:
-        model_type = "kan"
-        live_requested = False
+        first_message = {}
+
+    model_type = first_message.get("model", "kan")
+    live_requested = bool(first_message.get("live", False))
+    manual_requested = bool(first_message.get("manual", False))
 
     if live_requested:
         await _stream_active_job(websocket)
         return
 
     try:
-        sim = LiveSimulator(model_type=model_type)
+        if manual_requested:
+            # Manual play: env from an explicit env_config (e.g. the custom
+            # map currently open on the Setup page) or the checkpoint's env.
+            env_config = first_message.get("env_config") or None
+            sim = LiveSimulator(
+                model_type=model_type, env_config=env_config, auto=False
+            )
+        else:
+            sim = LiveSimulator(model_type=model_type)
     except Exception as exc:
         await websocket.send_json({"error": str(exc)})
         await websocket.close()
         return
 
     try:
-        while True:
-            frame = sim.step()
-            await websocket.send_json(frame)
-            if frame.get("done"):
-                sim.reset()
-            await asyncio.sleep(0.05)  # ~20 fps
+        if manual_requested:
+            # Send the initial state so the canvas is not blank, then step
+            # only when the user provides input.
+            await websocket.send_json(sim.initial_frame())
+            while True:
+                message = await websocket.receive_json()
+
+                if message.get("reset"):
+                    sim.reset()
+                    frame = sim.initial_frame()
+                elif "action" in message:
+                    frame = sim.step(int(message["action"]))
+                else:
+                    continue
+
+                await websocket.send_json(frame)
+        else:
+            while True:
+                frame = sim.step()
+                await websocket.send_json(frame)
+                if frame.get("done"):
+                    sim.reset()
+                await asyncio.sleep(0.05)  # ~20 fps
     except WebSocketDisconnect:
         pass
     except Exception:

@@ -129,6 +129,15 @@ def validate_training_config(raw: Optional[Dict[str, Any]] = None) -> Dict[str, 
         raise ValueError("loss_type must be 'huber', 'smooth_l1' or 'mse'")
     if config["huber_delta"] <= 0.0:
         raise ValueError("huber_delta must be > 0")
+    # Custom (v3) fixed-map env: random-obstacle counts are meaningless there.
+    # Zero them BEFORE validation so a stale form value can never slip through
+    # (legacy configs without a layout are unaffected).
+    if config.get("env_variant") == "custom":
+        config["env_min_obstacles"] = 0
+        config["env_max_obstacles"] = 0
+        if config.get("env_layout") in (None, ""):
+            config["env_layout"] = "[]"
+
     if config["env_max_obstacles"] < config["env_min_obstacles"]:
         raise ValueError("env_max_obstacles must be >= env_min_obstacles")
     if config["env_world_size"] <= 2.0:
@@ -164,6 +173,7 @@ def evaluate_agent(
     model_type: str = "unknown",
     phase: str = "evaluation",
     collect_episodes: bool = False,
+    env_label: Optional[str] = None,
 ):
     rewards = []
     successes = []
@@ -205,6 +215,12 @@ def evaluate_agent(
                         done=done,
                         phase=phase,
                         source=phase,
+                        env_label=env_label,
+                        sensors=(
+                            [float(obs[7]), float(obs[8]), float(obs[9])]
+                            if len(obs) >= 10
+                            else None
+                        ),
                     )
                 )
 
@@ -329,6 +345,17 @@ def train(
         env = create_env(config)
         eval_env = create_env(config)
 
+    env_label = (
+        f"external: {config['env_module']}"
+        if config.get("env_source") == "module" and config.get("env_module")
+        else "builtin "
+        + {
+            "v1": "v1 (single obstacle)",
+            "v2": "v2 (random obstacles)",
+            "custom": "custom map (v3)",
+        }.get(config.get("env_variant", "v2"), str(config.get("env_variant")))
+    )
+
     checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else Path("experiments/checkpoints")
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
@@ -392,6 +419,12 @@ def train(
                         phase="training",
                         source="training",
                         training_step=step,
+                        env_label=env_label,
+                        sensors=(
+                            [float(obs[7]), float(obs[8]), float(obs[9])]
+                            if len(obs) >= 10
+                            else None
+                        ),
                     )
                 )
 
@@ -431,6 +464,7 @@ def train(
                 model_type=model_type,
                 phase="evaluation",
                 collect_episodes=True,
+                env_label=env_label,
             )
             for row in eval_rows:
                 row["training_step"] = step
@@ -488,6 +522,7 @@ def train(
             model_type=model_type,
             phase="evaluation",
             collect_episodes=True,
+            env_label=env_label,
         )
         for row in final_eval_rows:
             row["training_step"] = total_steps

@@ -70,6 +70,9 @@ def build_frame(
     source: Optional[str] = None,
     training_step: Optional[int] = None,
     model_name: Optional[str] = None,
+    env_label: Optional[str] = None,
+    q_values: Optional[list] = None,
+    sensors: Optional[list] = None,
 ) -> Dict[str, Any]:
     """Build a renderable frame from the current environment and step results.
 
@@ -104,5 +107,15 @@ def build_frame(
 
     if training_step is not None:
         frame["training_step"] = int(training_step)
+
+    # Explainability extras (all optional - external envs / legacy callers
+    # simply omit them and the Live page hides the corresponding panels).
+    if env_label:
+        frame["env_label"] = str(env_label)
+    if q_values is not None:
+        frame["q_values"] = [float(q) for q in q_values]
+    if sensors is not None:
+        frame["sensors"] = [float(s) for s in sensors]
+        frame["sensor_range"] = float(getattr(env, "sensor_range", 0.0) or 0.0)
 
     return frame
