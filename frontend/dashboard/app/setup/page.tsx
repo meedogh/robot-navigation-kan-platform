@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { getJSON, postJSON } from "../../lib/api";
+import { getJSON, postJSON, deleteJSON } from "../../lib/api";
 
 type FieldDef = {
   key: string;
@@ -283,12 +283,105 @@ export default function Setup() {
     ok: boolean;
     message: string;
   }>({ testing: false, ok: false, message: "" });
-  const fileRef = useRef<HTMLInputElement>(null);
+
+  // --- Saved environments management ------------------------------------
+  const [savedEnvs, setSavedEnvs] = useState<Array<{ name: string; description?: string; obstacle_count?: number; created_at?: string }>>([]);
+  const [envDialogOpen, setEnvDialogOpen] = useState(false);
+  const [envName, setEnvName] = useState("");
+  const [envDescription, setEnvDescription] = useState("");
+  const [envOverwrite, setEnvOverwrite] = useState(false);
+  const [envActionNotice, setEnvActionNotice] = useState("");
 
   // --- Custom v3 layout editor --------------------------------------
+  const fileRef = useRef<HTMLInputElement>(null);
   const previewRef = useRef<HTMLCanvasElement>(null);
   const layoutRows = parseLayout(form.env_layout);
   const worldSize = parseFloat(form.env_world_size) || 20;
+
+  // --- Saved environments functions ----------------------------------
+  async function fetchSavedEnvironments() {
+    try {
+      const envs = await getJSON<Array<{ name: string; description?: string; obstacle_count?: number; created_at?: string }>>("/api/environments");
+      setSavedEnvs(envs);
+    } catch {
+      // Silently ignore errors when fetching environments
+    }
+  }
+
+  async function handleSaveEnvironment() {
+    if (!envName.trim()) {
+      setEnvActionNotice("Please enter a name for the environment.");
+      return;
+    }
+    if (form.env_variant !== "custom") {
+      setEnvActionNotice("Save is only available for custom (v3) layouts.");
+      return;
+    }
+    try {
+      await postJSON("/api/environments", {
+        name: envName.trim(),
+        layout: form.env_layout ? JSON.parse(form.env_layout) : [],
+        world_size: parseFloat(form.env_world_size) || 20,
+        max_steps: parseInt(form.env_max_steps) || 300,
+        frame_skip: parseInt(form.env_frame_skip) || 3,
+        sensor_range: parseFloat(form.env_sensor_range) || 12,
+        robot_radius: parseFloat(form.env_robot_radius) || 0.35,
+        target_radius: parseFloat(form.env_target_radius) || 0.8,
+        max_speed: parseFloat(form.env_max_speed) || 0.35,
+        turn_angle_deg: parseFloat(form.env_turn_angle_deg) || 30,
+        description: envDescription,
+        overwrite: envOverwrite,
+      });
+      setEnvActionNotice(`Environment '${envName}' saved successfully!`);
+      setEnvDialogOpen(false);
+      setEnvName("");
+      setEnvDescription("");
+      setEnvOverwrite(false);
+      await fetchSavedEnvironments();
+    } catch (e: any) {
+      setEnvActionNotice(e?.response?.data?.detail || "Failed to save environment.");
+    }
+  }
+
+  async function handleLoadEnvironment(name: string) {
+    try {
+      const spec = await getJSON<{ name: string; description?: string; env_section: any }>(`/api/environments/${name}`);
+      const params = spec.env_section?.params || {};
+      setForm((p) => ({
+        ...p,
+        env_source: "builtin",
+        env_variant: "custom",
+        env_world_size: String(params.world_size ?? 20),
+        env_max_steps: String(params.max_steps ?? 300),
+        env_frame_skip: String(params.frame_skip ?? 3),
+        env_sensor_range: String(params.sensor_range ?? 12),
+        env_robot_radius: String(params.robot_radius ?? 0.35),
+        env_target_radius: String(params.target_radius ?? 0.8),
+        env_max_speed: String(params.max_speed ?? 0.35),
+        env_turn_angle_deg: String(params.turn_angle_deg ?? 30),
+        env_layout: params.layout || "",
+      }));
+      setNotice(`Loaded environment '${name}'.`);
+    } catch {
+      setError("Failed to load environment.");
+    }
+  }
+
+  async function handleDeleteEnvironment(name: string) {
+    if (!confirm(`Delete environment '${name}'?`)) return;
+    try {
+      await deleteJSON(`/api/environments/${name}`);
+      setEnvActionNotice(`Environment '${name}' deleted.`);
+      await fetchSavedEnvironments();
+    } catch {
+      setEnvActionNotice("Failed to delete environment.");
+    }
+  }
+
+  // Fetch saved environments on mount and when custom variant is selected
+  useEffect(() => {
+    fetchSavedEnvironments();
+  }, []);
 
   function writeLayout(rows: LayoutObstacle[]) {
     setForm((p) => ({ ...p, env_layout: layoutToJSON(rows) }));
@@ -815,6 +908,141 @@ return (
                   )}
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* Saved Environments Section */}
+          {form.env_variant === "custom" && (
+            <div style={{ marginBottom: 20 }}>
+              <h2 className="section-title">Saved Environments</h2>
+              <p className="hint" style={{ marginBottom: 8 }}>
+                Save your custom layouts to reuse later, or load a previously saved environment.
+              </p>
+              <div className="actions" style={{ marginTop: 0, marginBottom: 12 }}>
+                <button className="secondary" onClick={() => setEnvDialogOpen(true)}>
+                  + Save Current Layout
+                </button>
+                <button className="secondary" onClick={fetchSavedEnvironments}>
+                  Refresh
+                </button>
+              </div>
+              {envActionNotice && (
+                <p className="hint" style={{ marginBottom: 8, color: envActionNotice.includes("successfully") ? "#4ade80" : "#fbbf24" }}>
+                  {envActionNotice}
+                </p>
+              )}
+              {savedEnvs.length === 0 ? (
+                <p className="muted">No saved environments yet. Design a map above and click Save Current Layout.</p>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {savedEnvs.map((env) => (
+                    <div
+                      key={env.name}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        padding: "8px 12px",
+                        background: "#1a2233",
+                        borderRadius: 6,
+                        border: "1px solid #232d42",
+                      }}
+                    >
+                      <div>
+                        <strong>{env.name}</strong>
+                        {env.description && (
+                          <span className="muted" style={{ marginLeft: 8 }}>
+                            - {env.description}
+                          </span>
+                        )}
+                        {env.obstacle_count !== undefined && (
+                          <span className="muted" style={{ marginLeft: 8 }}>
+                            ({env.obstacle_count} obstacles)
+                          </span>
+                        )}
+                      </div>
+                      <div className="actions" style={{ marginTop: 0 }}>
+                        <button
+                          className="secondary"
+                          onClick={() => handleLoadEnvironment(env.name)}
+                        >
+                          Load
+                        </button>
+                        <button
+                          className="secondary"
+                          onClick={() => handleDeleteEnvironment(env.name)}
+                          style={{ color: "#ff5c7a" }}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Save Dialog */}
+              {envDialogOpen && (
+                <div
+                  style={{
+                    marginTop: 16,
+                    padding: 16,
+                    background: "#1a2233",
+                    borderRadius: 8,
+                    border: "1px solid #232d42",
+                  }}
+                >
+                  <h3 style={{ marginBottom: 12 }}>Save Environment</h3>
+                  <div style={{ marginBottom: 12 }}>
+                    <label style={{ display: "block", marginBottom: 4 }}>Name *</label>
+                    <input
+                      type="text"
+                      value={envName}
+                      onChange={(e) => setEnvName(e.target.value)}
+                      placeholder="e.g., maze-level-1"
+                      style={{
+                        width: "100%",
+                        padding: "8px 12px",
+                        background: "#0f1419",
+                        border: "1px solid #232d42",
+                        borderRadius: 4,
+                        color: "#e6edf3",
+                      }}
+                    />
+                  </div>
+                  <div style={{ marginBottom: 12 }}>
+                    <label style={{ display: "block", marginBottom: 4 }}>Description (optional)</label>
+                    <input
+                      type="text"
+                      value={envDescription}
+                      onChange={(e) => setEnvDescription(e.target.value)}
+                      placeholder="e.g., A tricky maze with narrow corridors"
+                      style={{
+                        width: "100%",
+                        padding: "8px 12px",
+                        background: "#0f1419",
+                        border: "1px solid #232d42",
+                        borderRadius: 4,
+                        color: "#e6edf3",
+                      }}
+                    />
+                  </div>
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+                    <input
+                      type="checkbox"
+                      checked={envOverwrite}
+                      onChange={(e) => setEnvOverwrite(e.target.checked)}
+                    />
+                    <span>Overwrite if environment with this name already exists</span>
+                  </label>
+                  <div className="actions" style={{ marginTop: 0 }}>
+                    <button onClick={handleSaveEnvironment}>Save</button>
+                    <button className="secondary" onClick={() => setEnvDialogOpen(false)}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

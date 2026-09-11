@@ -18,8 +18,12 @@ only imported when it is actually used.
 
 import importlib
 import inspect
+import json
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+# ENV_STORAGE_DIR is defined in env_manager.py but imported lazily to avoid
+# circular imports.  Use simulation.env_manager.ENV_STORAGE_DIR when needed.
 
 # Builtin environments shipped with the platform (registry key -> class path).
 BUILTIN_ENVS: Dict[str, str] = {
@@ -143,6 +147,76 @@ def _supported_kwargs(env_class, params: Optional[Dict[str, Any]]):
     return kwargs, sorted(skipped)
 
 
+def environment_section(
+    source: str = "builtin",
+    variant: str = "v2",
+    module: Optional[str] = None,
+    world_size: float = 20.0,
+    max_steps: int = 300,
+    frame_skip: int = 3,
+    min_obstacles: int = 3,
+    max_obstacles: int = 6,
+    sensor_range: float = 12.0,
+    robot_radius: float = 0.35,
+    target_radius: float = 0.8,
+    max_speed: float = 0.35,
+    turn_angle_deg: float = 30.0,
+    rect_obstacle_ratio: float = 0.5,
+    rect_rotation: bool = False,
+    layout: Any = None,
+    host: str = "127.0.0.1",
+    port: int = 5577,
+    timeout: float = 10.0,
+) -> Dict[str, Any]:
+    """Build a run-config environment section from individual parameters.
+
+    This is the inverse of ``env_config_from_flat`` - it takes individual
+    parameters and builds the full environment section dict suitable for
+    ``create_env()`` or for embedding in a run config.
+    """
+    params: Dict[str, Any] = {
+        "world_size": world_size,
+        "max_steps": max_steps,
+        "frame_skip": frame_skip,
+        "sensor_range": sensor_range,
+        "robot_radius": robot_radius,
+        "target_radius": target_radius,
+        "max_speed": max_speed,
+        "turn_angle_deg": turn_angle_deg,
+    }
+
+    # Add builtin-variant-specific params
+    if source == "builtin" and variant == "v2":
+        params["min_obstacles"] = min_obstacles
+        params["max_obstacles"] = max_obstacles
+        params["rect_obstacle_ratio"] = rect_obstacle_ratio
+        params["rect_rotation"] = rect_rotation
+
+    # Add custom-layout param
+    if source == "builtin" and variant == "custom" and layout is not None:
+        if isinstance(layout, str):
+            params["layout"] = layout
+        else:
+            params["layout"] = json.dumps(layout)
+
+    # Add module-specific params
+    if source == "module":
+        params["host"] = host
+        params["port"] = port
+        params["timeout"] = timeout
+
+    section: Dict[str, Any] = {
+        "source": source,
+        "variant": variant,
+        "module": module,
+        "params": params,
+    }
+
+    # Add spec for builtin environments
+    if source == "builtin":
+        section["spec"] = builtin_env_spec()
+
+    return section
 def env_config_from_flat(flat: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Extract the run-config ``environment`` section from a flat training config.
 

@@ -12,6 +12,11 @@ export async function postJSON<T>(path: string, body?: unknown): Promise<T> {
   return data;
 }
 
+export async function deleteJSON<T = void>(path: string): Promise<T> {
+  const { data } = await axios.delete<T>(`${API_BASE_URL}${path}`);
+  return data;
+}
+
 // Download a (possibly binary) file from the backend, surfacing API error
 // details (e.g. "ONNX export failed: no checkpoint") to the caller.
 export async function downloadFile(

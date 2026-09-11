@@ -1,0 +1,16 @@
+{
+  "name": "Test",
+  "description": "f",
+  "created_at": "2026-09-11T10:00:08.002599+00:00",
+  "world_size": 20,
+  "max_steps": 300,
+  "sensor_range": 12,
+  "obstacle_count": 0,
+  "layout_summary": {
+    "obstacle_count": 4,
+    "shapes": {
+      "circle": 2,
+      "rect": 2
+    }
+  }
+}

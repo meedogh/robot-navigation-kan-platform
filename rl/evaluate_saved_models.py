@@ -139,7 +139,8 @@ def main(
     seed_base: int = 999_999,
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     frame_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
-    episode_callback: Optional[Callable[[int, int], None]] = None
+    episode_callback: Optional[Callable[[int, int], None]] = None,
+    env_name: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Evaluate every saved custom checkpoint and write the final evaluation CSV.
 
@@ -147,6 +148,9 @@ def main(
     evaluated model, `frame_callback` on every environment step (for live
     visualization), and `episode_callback(done, total)` once per episode (for
     smooth progress bars).
+
+    If `env_name` is provided, the saved environment with that name is used
+    for evaluation instead of the one from the checkpoint config.
     """
     checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else CHECKPOINT_DIR
     results_dir = Path(results_dir) if results_dir else RESULTS_DIR
@@ -181,7 +185,12 @@ def main(
 
         # Each model may have been trained in a different environment (custom
         # world size or an external simulator) - resolve it per checkpoint.
-        env_config = env_config_from_checkpoint_dir(checkpoint_dir, model_type)
+        # If env_name is provided, use the saved environment instead.
+        if env_name is not None:
+            from simulation.env_manager import load_custom_environment
+            env_config = load_custom_environment(env_name)
+        else:
+            env_config = env_config_from_checkpoint_dir(checkpoint_dir, model_type)
         probe_env = create_env(env_config)
         obs_dim = probe_env.observation_space.shape[0]
         action_dim = probe_env.action_space.n
@@ -246,4 +255,38 @@ def main(
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Evaluate saved DQN models")
+    parser.add_argument(
+        "--env-name",
+        type=str,
+        default=None,
+        help="Name of a saved custom environment to evaluate on",
+    )
+    parser.add_argument(
+        "--checkpoint-dir",
+        type=str,
+        default=None,
+        help="Directory containing model checkpoints",
+    )
+    parser.add_argument(
+        "--results-dir",
+        type=str,
+        default=None,
+        help="Directory to save evaluation results",
+    )
+    parser.add_argument(
+        "--episodes",
+        type=int,
+        default=100,
+        help="Number of episodes to evaluate per model",
+    )
+    args = parser.parse_args()
+
+    main(
+        checkpoint_dir=args.checkpoint_dir,
+        results_dir=args.results_dir,
+        episodes=args.episodes,
+        env_name=args.env_name,
+    )

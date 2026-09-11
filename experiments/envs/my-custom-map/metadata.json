@@ -1,0 +1,16 @@
+{
+  "name": "my-custom-map",
+  "description": "A custom test map",
+  "created_at": "2026-09-11T09:25:01.169589+00:00",
+  "world_size": 20.0,
+  "max_steps": 300,
+  "sensor_range": 12.0,
+  "obstacle_count": 0,
+  "layout_summary": {
+    "obstacle_count": 2,
+    "shapes": {
+      "rect": 1,
+      "circle": 1
+    }
+  }
+}

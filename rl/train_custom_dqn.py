@@ -651,6 +651,14 @@ if __name__ == "__main__":
         help="Point where the huber/smooth-l1 loss turns quadratic (default: 1.0)"
     )
 
+    parser.add_argument(
+        "--env-name",
+        type=str,
+        default=None,
+        help="Name of a saved custom environment to load and train on "
+        "(saved via simulation.env_manager.save_custom_environment or the dashboard)"
+    )
+
     args = parser.parse_args()
 
     # 1) Start from the run config file (if any), 2) apply explicitly given
@@ -669,6 +677,18 @@ if __name__ == "__main__":
                 else ""
             )
             + ")"
+        )
+
+    # Load saved environment if --env-name is specified
+    if args.env_name is not None:
+        from simulation.env_manager import load_environment_for_training
+
+        env_config = load_environment_for_training(args.env_name)
+        config = {**config, **env_config}
+        print(
+            f"Loaded saved environment: {args.env_name} "
+            f"(source: {config.get('env_source', 'builtin')!r}, "
+            f"variant: {config.get('env_variant', 'custom')!r})"
         )
 
     cli_overrides: Dict[str, Any] = {}

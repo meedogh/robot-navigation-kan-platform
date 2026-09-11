@@ -370,6 +370,71 @@ def test_environment(payload: dict):
         raise HTTPException(status_code=400, detail=f"Env probe failed: {exc}")
 
 
+# ─── Saved Custom Environment Management ─────────────────────────────────
+
+
+@app.get("/api/environments")
+def list_environments():
+    """List all saved custom environments."""
+    from simulation.env_manager import list_saved_environments
+    return list_saved_environments()
+
+
+@app.get("/api/environments/{name}")
+def get_environment(name: str):
+    """Get a specific saved environment's full spec (metadata + env section)."""
+    from simulation.env_manager import get_environment_spec
+    try:
+        return get_environment_spec(name)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Environment '{name}' not found")
+
+
+@app.post("/api/environments")
+def save_environment(payload: dict):
+    """Save a new custom environment from the UI."""
+    from simulation.env_manager import save_custom_environment
+
+    name = payload.get("name")
+    if not name:
+        raise HTTPException(status_code=400, detail="Environment name is required")
+
+    try:
+        metadata = save_custom_environment(
+            name=name,
+            layout=payload.get("layout"),
+            world_size=payload.get("world_size", 20.0),
+            max_steps=payload.get("max_steps", 300),
+            frame_skip=payload.get("frame_skip", 3),
+            sensor_range=payload.get("sensor_range", 12.0),
+            robot_radius=payload.get("robot_radius", 0.35),
+            target_radius=payload.get("target_radius", 0.8),
+            max_speed=payload.get("max_speed", 0.35),
+            turn_angle_deg=payload.get("turn_angle_deg", 30.0),
+            description=payload.get("description", ""),
+            overwrite=payload.get("overwrite", False),
+        )
+        return {"status": "ok", "metadata": metadata}
+    except FileExistsError:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Environment '{name}' already exists. Set overwrite=true to replace.",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.delete("/api/environments/{name}")
+def delete_environment(name: str):
+    """Delete a saved custom environment."""
+    from simulation.env_manager import delete_custom_environment
+    try:
+        delete_custom_environment(name)
+        return {"status": "ok", "message": f"Environment '{name}' deleted"}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Environment '{name}' not found")
+
+
 @app.post("/api/live/toggle")
 def toggle_live_view(payload: dict):
     """Enable or disable live frame streaming from the active training/eval job."""

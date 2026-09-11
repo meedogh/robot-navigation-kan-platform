@@ -1,0 +1,71 @@
+{
+  "source": "builtin",
+  "variant": "custom",
+  "module": null,
+  "params": {
+    "world_size": 20.0,
+    "max_steps": 300,
+    "frame_skip": 3,
+    "sensor_range": 12.0,
+    "robot_radius": 0.35,
+    "target_radius": 0.8,
+    "max_speed": 0.35,
+    "turn_angle_deg": 30.0,
+    "layout": "[{\"shape\": \"rect\", \"x\": 0, \"y\": -3, \"width\": 8, \"height\": 0.8}, {\"shape\": \"circle\", \"x\": 5, \"y\": 5, \"radius\": 1.5}]"
+  },
+  "spec": {
+    "observation": {
+      "type": "box",
+      "shape": [
+        10
+      ],
+      "low": -1.0,
+      "high": 1.0,
+      "features": [
+        "robot_x",
+        "robot_y",
+        "robot_angle",
+        "target_x",
+        "target_y",
+        "distance_to_target",
+        "angle_to_target",
+        "front_sensor",
+        "left_sensor",
+        "right_sensor"
+      ]
+    },
+    "action": {
+      "type": "discrete",
+      "n": 6,
+      "labels": [
+        "forward",
+        "forward_left",
+        "forward_right",
+        "turn_left",
+        "turn_right",
+        "stop"
+      ]
+    },
+    "episode_end": [
+      "target_reached",
+      "collision",
+      "stuck",
+      "max_steps"
+    ],
+    "info_keys": [
+      "distance_to_target",
+      "step",
+      "reached_target",
+      "collision",
+      "stuck",
+      "energy_used"
+    ],
+    "visualization_attrs": [
+      "world_size",
+      "robot_pos",
+      "robot_angle",
+      "target_pos",
+      "obstacles"
+    ]
+  }
+}
