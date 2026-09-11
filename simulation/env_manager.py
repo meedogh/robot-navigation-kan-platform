@@ -76,6 +76,12 @@ def save_custom_environment(
     target_radius: float = 0.8,
     max_speed: float = 0.35,
     turn_angle_deg: float = 30.0,
+    moving_obstacle_ratio: float = 0.0,
+    obstacle_speed: float = 0.1,
+    use_robot_physics: bool = False,
+    acceleration: float = 0.05,
+    deceleration: float = 0.1,
+    max_turn_rate: float = 45.0,
     description: str = "",
     overwrite: bool = False,
 ) -> Dict[str, Any]:
@@ -92,6 +98,9 @@ def save_custom_environment(
         sensor_range=sensor_range, robot_radius=robot_radius,
         target_radius=target_radius, max_speed=max_speed,
         turn_angle_deg=turn_angle_deg, layout=layout,
+        moving_obstacle_ratio=moving_obstacle_ratio, obstacle_speed=obstacle_speed,
+        use_robot_physics=use_robot_physics, acceleration=acceleration,
+        deceleration=deceleration, max_turn_rate=max_turn_rate,
     )
 
     _env_config_path(name).write_text(json.dumps(env_section, indent=2))

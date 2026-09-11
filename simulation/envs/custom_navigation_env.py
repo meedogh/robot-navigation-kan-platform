@@ -47,7 +47,13 @@ class CustomNavigationEnv(RobotNavigationEnv):
         max_speed: float = 0.35,
         turn_angle_deg: float = 30.0,
         layout=None,
-        **_ignored,  # min/max_obstacles, rect ratio etc. are irrelevant here
+        # Robot physics
+        use_robot_physics: bool = False,
+        acceleration: float = 0.05,
+        deceleration: float = 0.1,
+        max_turn_rate: float = 45.0,
+        obstacle_speed: float = 0.1,
+        **_ignored,
     ):
         super().__init__(
             world_size=world_size,
@@ -62,6 +68,11 @@ class CustomNavigationEnv(RobotNavigationEnv):
             turn_angle_deg=turn_angle_deg,
             rect_obstacle_ratio=0.0,
             rect_rotation=False,
+            use_robot_physics=use_robot_physics,
+            acceleration=acceleration,
+            deceleration=deceleration,
+            max_turn_rate=max_turn_rate,
+            obstacle_speed=obstacle_speed,
         )
 
         self.layout = self._parse_layout(layout)
@@ -70,7 +81,10 @@ class CustomNavigationEnv(RobotNavigationEnv):
     # Layout handling
     # ------------------------------------------------------------------
     def _parse_layout(self, layout):
-        """Accept a JSON string, a list of dicts, or None (-> empty map)."""
+        """Accept a JSON string, a list of dicts, or None (-> empty map).
+
+        Supports moving obstacles with 'vx' and 'vy' velocity components.
+        """
         if layout is None or layout == "":
             return []
 
@@ -99,32 +113,49 @@ class CustomNavigationEnv(RobotNavigationEnv):
                     f"[-{half}, {half}] world"
                 )
 
+            # Moving obstacle properties
+            is_moving = item.get("moving", False)
+            vx = float(item.get("vx", 0.0)) if is_moving else 0.0
+            vy = float(item.get("vy", 0.0)) if is_moving else 0.0
+
             if shape == "circle":
                 radius = float(item.get("radius", 1.0))
                 if radius <= 0:
                     raise ValueError(f"env_layout[{i}] radius must be > 0")
-                parsed.append({
+                obstacle = {
                     "shape": "circle",
                     "pos": np.array([x, y], dtype=np.float32),
                     "radius": radius,
-                })
+                    "moving": is_moving,
+                    "cx": x,
+                    "cy": y,
+                    "vx": vx,
+                    "vy": vy,
+                }
             elif shape == "rect":
                 width = float(item.get("width", 1.0))
                 height = float(item.get("height", 1.0))
                 angle = float(item.get("angle", 0.0))
                 if width <= 0 or height <= 0:
                     raise ValueError(f"env_layout[{i}] width/height must be > 0")
-                parsed.append({
+                obstacle = {
                     "shape": "rect",
                     "pos": np.array([x, y], dtype=np.float32),
                     "width": width,
                     "height": height,
                     "angle": angle,
-                })
+                    "moving": is_moving,
+                    "cx": x,
+                    "cy": y,
+                    "vx": vx,
+                    "vy": vy,
+                }
             else:
                 raise ValueError(
                     f"env_layout[{i}] shape must be 'circle' or 'rect', got {shape!r}"
                 )
+
+            parsed.append(obstacle)
 
         return parsed
 

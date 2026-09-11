@@ -411,6 +411,12 @@ def save_environment(payload: dict):
             target_radius=payload.get("target_radius", 0.8),
             max_speed=payload.get("max_speed", 0.35),
             turn_angle_deg=payload.get("turn_angle_deg", 30.0),
+            moving_obstacle_ratio=payload.get("moving_obstacle_ratio", 0.0),
+            obstacle_speed=payload.get("obstacle_speed", 0.1),
+            use_robot_physics=payload.get("use_robot_physics", False),
+            acceleration=payload.get("acceleration", 0.05),
+            deceleration=payload.get("deceleration", 0.1),
+            max_turn_rate=payload.get("max_turn_rate", 45.0),
             description=payload.get("description", ""),
             overwrite=payload.get("overwrite", False),
         )

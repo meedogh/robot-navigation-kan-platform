@@ -53,6 +53,36 @@ const FIELD_GROUPS: { title: string; fields: FieldDef[] }[] = [
         options: [{ value: "1", label: "Rotated" }, { value: "0", label: "Axis-aligned" }],
         hint: "Whether rectangles spawn at random angles (v2 only)",
       },
+      {
+        key: "env_moving_obstacle_ratio", label: "Moving obstacle ratio", type: "float", min: 0, max: 1, step: 0.1,
+        hint: "Fraction of obstacles that move (0 = static, 1 = all moving)",
+      },
+      {
+        key: "env_obstacle_speed", label: "Obstacle speed", type: "float", min: 0.01, max: 1.0, step: 0.05,
+        hint: "Speed of moving obstacles (world units per step)",
+      },
+    ],
+  },
+  {
+    title: "Robot Physics",
+    fields: [
+      {
+        key: "env_use_robot_physics", label: "Enable physics", type: "select",
+        options: [{ value: "0", label: "Off (instant)" }, { value: "1", label: "On (momentum)" }],
+        hint: "Add acceleration/deceleration to robot movement",
+      },
+      {
+        key: "env_acceleration", label: "Acceleration", type: "float", min: 0.01, max: 1.0, step: 0.01,
+        hint: "How quickly robot speeds up (only with physics on)",
+      },
+      {
+        key: "env_deceleration", label: "Deceleration", type: "float", min: 0.01, max: 1.0, step: 0.01,
+        hint: "How quickly robot slows down (only with physics on)",
+      },
+      {
+        key: "env_max_turn_rate", label: "Max turn rate (deg/step)", type: "float", min: 5, max: 90, step: 5,
+        hint: "Maximum turning speed (only with physics on)",
+      },
     ],
   },
   {
@@ -135,6 +165,9 @@ type LayoutObstacle = {
   width?: number;
   height?: number;
   angle?: number; // radians (stored); edited as degrees in the UI
+  moving?: boolean; // moving obstacle flag
+  vx?: number; // horizontal velocity (world units per step)
+  vy?: number; // vertical velocity (world units per step)
 };
 
 function parseLayout(json: string | undefined): LayoutObstacle[] {
@@ -177,11 +210,13 @@ function CustomLayoutRow({
   obstacle,
   onChange,
   onAngleDeg,
+  onToggleMoving,
   onRemove,
 }: {
   obstacle: LayoutObstacle;
   onChange: (key: keyof LayoutObstacle, value: string) => void;
   onAngleDeg: (degrees: string) => void;
+  onToggleMoving: () => void;
   onRemove: () => void;
 }) {
   return (
@@ -261,6 +296,36 @@ function CustomLayoutRow({
         )}
       </td>
       <td>
+        <input
+          type="checkbox"
+          checked={!!obstacle.moving}
+          title="Moving obstacle"
+          onChange={onToggleMoving}
+        />
+      </td>
+      <td>
+        <span style={{ display: "flex", gap: 4 }}>
+          <input
+            type="number"
+            step={0.05}
+            style={{ width: 56 }}
+            title="velocity x (vx)"
+            value={obstacle.vx ?? 0}
+            disabled={!obstacle.moving}
+            onChange={(e) => onChange("vx", e.target.value)}
+          />
+          <input
+            type="number"
+            step={0.05}
+            style={{ width: 56 }}
+            title="velocity y (vy)"
+            value={obstacle.vy ?? 0}
+            disabled={!obstacle.moving}
+            onChange={(e) => onChange("vy", e.target.value)}
+          />
+        </span>
+      </td>
+      <td>
         <button className="secondary" onClick={onRemove} title="Remove obstacle">
           ✕
         </button>
@@ -329,6 +394,12 @@ export default function Setup() {
         target_radius: parseFloat(form.env_target_radius) || 0.8,
         max_speed: parseFloat(form.env_max_speed) || 0.35,
         turn_angle_deg: parseFloat(form.env_turn_angle_deg) || 30,
+        moving_obstacle_ratio: parseFloat(form.env_moving_obstacle_ratio) || 0,
+        obstacle_speed: parseFloat(form.env_obstacle_speed) || 0.1,
+        use_robot_physics: form.env_use_robot_physics === "1",
+        acceleration: parseFloat(form.env_acceleration) || 0.05,
+        deceleration: parseFloat(form.env_deceleration) || 0.1,
+        max_turn_rate: parseFloat(form.env_max_turn_rate) || 45,
         description: envDescription,
         overwrite: envOverwrite,
       });
@@ -359,6 +430,12 @@ export default function Setup() {
         env_target_radius: String(params.target_radius ?? 0.8),
         env_max_speed: String(params.max_speed ?? 0.35),
         env_turn_angle_deg: String(params.turn_angle_deg ?? 30),
+        env_moving_obstacle_ratio: String(params.moving_obstacle_ratio ?? 0),
+        env_obstacle_speed: String(params.obstacle_speed ?? 0.1),
+        env_use_robot_physics: params.use_robot_physics ? "1" : "0",
+        env_acceleration: String(params.acceleration ?? 0.05),
+        env_deceleration: String(params.deceleration ?? 0.1),
+        env_max_turn_rate: String(params.max_turn_rate ?? 45),
         env_layout: params.layout || "",
       }));
       setNotice(`Loaded environment '${name}'.`);
@@ -407,12 +484,20 @@ export default function Setup() {
     writeLayout(rows);
   }
 
+  function toggleMoving(i: number) {
+    const rows = layoutRows.map((r, idx) => {
+      if (idx !== i) return r;
+      return { ...r, moving: !r.moving };
+    });
+    writeLayout(rows);
+  }
+
   function addObstacle(shape: "circle" | "rect") {
     writeLayout([
       ...layoutRows,
       shape === "circle"
-        ? { shape, x: 0, y: 0, radius: 1 }
-        : { shape, x: 0, y: 0, width: 4, height: 0.8, angle: 0 },
+        ? { shape, x: 0, y: 0, radius: 1, moving: false, vx: 0, vy: 0 }
+        : { shape, x: 0, y: 0, width: 4, height: 0.8, angle: 0, moving: false, vx: 0, vy: 0 },
     ]);
   }
 
@@ -890,6 +975,8 @@ return (
                           <th>Y</th>
                           <th>Size</th>
                           <th>Angle°</th>
+                          <th>Moving</th>
+                          <th>Vel (vx, vy)</th>
                           <th></th>
                         </tr>
                       </thead>
@@ -900,6 +987,7 @@ return (
                             obstacle={o}
                             onChange={(key, value) => updateObstacle(i, key, value)}
                             onAngleDeg={(value) => updateAngleDeg(i, value)}
+                            onToggleMoving={() => toggleMoving(i)}
                             onRemove={() => removeObstacle(i)}
                           />
                         ))}

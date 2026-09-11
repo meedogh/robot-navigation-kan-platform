@@ -1,5 +1,6 @@
 import math
 from collections import deque
+from typing import List, Optional, Tuple
 
 import gymnasium as gym
 import numpy as np
@@ -20,6 +21,8 @@ class RobotNavigationEnv(gym.Env):
         - Stop penalty (punishes idling when far from target)
         - Energy usage tracking
         - 6 discrete actions
+        - Moving obstacles (optional)
+        - Robot physics with acceleration/deceleration (optional)
     """
 
     metadata = {"render_modes": ["human"]}
@@ -38,6 +41,14 @@ class RobotNavigationEnv(gym.Env):
         turn_angle_deg: float = 30.0,
         rect_obstacle_ratio: float = 0.5,
         rect_rotation: bool = True,
+        # Moving obstacles config
+        moving_obstacle_ratio: float = 0.0,
+        obstacle_speed: float = 0.1,
+        # Robot physics config (disabled by default)
+        use_robot_physics: bool = False,
+        acceleration: float = 0.05,
+        deceleration: float = 0.1,
+        max_turn_rate: float = 45.0,
     ):
         super().__init__()
 
@@ -51,33 +62,31 @@ class RobotNavigationEnv(gym.Env):
         self.max_obstacles = max_obstacles
         self.sensor_range = sensor_range
 
-        # Obstacle shape variation: with probability `rect_obstacle_ratio` a
-        # sampled obstacle is an axis-aligned (or rotated) rectangle instead of
-        # a circle.  0.0 = all circles, 1.0 = all rectangles.
+        # Obstacle shape variation
         self.rect_obstacle_ratio = float(np.clip(rect_obstacle_ratio, 0.0, 1.0))
         self.rect_rotation = bool(rect_rotation)
 
-        # Physics constants (previously hardcoded; now configurable so a run
-        # config can fully describe the environment, e.g. for re-implementing
-        # it in Unity / Gazebo).
+        # Physics constants
         self.robot_radius = float(robot_radius)
         self.target_radius = float(target_radius)
         self.max_speed = float(max_speed)
         self.turn_angle = math.radians(float(turn_angle_deg))
 
-        # 0 forward
-        # 1 forward-left
-        # 2 forward-right
-        # 3 turn left
-        # 4 turn right
-        # 5 stop
+        # Moving obstacles config
+        self.moving_obstacle_ratio = float(np.clip(moving_obstacle_ratio, 0.0, 1.0))
+        self.obstacle_speed = float(obstacle_speed)
+
+        # Robot physics config
+        self.use_robot_physics = bool(use_robot_physics)
+        self.acceleration = float(acceleration)
+        self.deceleration = float(deceleration)
+        self.max_turn_rate = math.radians(float(max_turn_rate))
+
+        # Action space: 0 forward, 1 forward-left, 2 forward-right, 3 turn left, 4 turn right, 5 stop
         self.action_space = spaces.Discrete(6)
 
-        # Observation:
-        # robot_x, robot_y, robot_angle,
-        # target_x, target_y,
-        # distance_to_target, angle_to_target,
-        # front_sensor, left_sensor, right_sensor
+        # Observation: robot_x, robot_y, robot_angle, target_x, target_y,
+        # distance_to_target, angle_to_target, front_sensor, left_sensor, right_sensor
         self.observation_space = spaces.Box(
             low=-1.0,
             high=1.0,
@@ -85,10 +94,15 @@ class RobotNavigationEnv(gym.Env):
             dtype=np.float32,
         )
 
+        # State
         self.robot_pos = np.zeros(2, dtype=np.float32)
         self.robot_angle = 0.0
         self.target_pos = np.zeros(2, dtype=np.float32)
-        self.obstacles = []
+        self.obstacles: List[dict] = []
+
+        # Robot physics state
+        self.robot_velocity = 0.0
+        self.robot_angular_velocity = 0.0
 
         self.current_step = 0
         self.energy_used = 0.0
@@ -193,25 +207,18 @@ class RobotNavigationEnv(gym.Env):
         }
         self.energy_used += energy_costs[action]
 
-        # Turning actions
-        if action == 1:
-            self.robot_angle += self.turn_angle / 2.0
-        elif action == 2:
-            self.robot_angle -= self.turn_angle / 2.0
-        elif action == 3:
-            self.robot_angle += self.turn_angle
-        elif action == 4:
-            self.robot_angle -= self.turn_angle
+        # Physics-based or instant movement
+        if self.use_robot_physics:
+            self._update_robot_physics(action)
+        else:
+            self._update_robot_instant(action)
 
-        self.robot_angle = self._normalize_angle(self.robot_angle)
+        # Update moving obstacles
+        self._update_moving_obstacles()
 
-        # Moving actions
-        if action in [0, 1, 2]:
-            for _ in range(self.frame_skip):
-                self._move_forward()
-                if self._check_collision():
-                    self.collision = True
-                    break
+        # Check collisions after obstacle movement
+        if self._check_collision():
+            self.collision = True
 
         current_distance = self._distance(self.robot_pos, self.target_pos)
         displacement = self._distance(self.robot_pos, prev_pos)
@@ -233,9 +240,7 @@ class RobotNavigationEnv(gym.Env):
         # Punish stopping when not near target
         if action == 5 and not near_target:
             self.stop_counter += 1
-            # Base stop penalty
             reward -= 0.25
-            # Increasing penalty for continuous stopping
             reward -= 0.02 * min(self.stop_counter, 20)
         else:
             self.stop_counter = 0
@@ -277,6 +282,133 @@ class RobotNavigationEnv(gym.Env):
         truncated = bool(self.current_step >= self.max_steps and not terminated)
 
         return self._get_obs(), reward, terminated, truncated, self._get_info()
+
+    def _update_robot_instant(self, action: int):
+        """Original instant movement (no physics)."""
+        # Turning actions
+        if action == 1:
+            self.robot_angle += self.turn_angle / 2.0
+        elif action == 2:
+            self.robot_angle -= self.turn_angle / 2.0
+        elif action == 3:
+            self.robot_angle += self.turn_angle
+        elif action == 4:
+            self.robot_angle -= self.turn_angle
+
+        self.robot_angle = self._normalize_angle(self.robot_angle)
+
+        # Moving actions
+        if action in [0, 1, 2]:
+            for _ in range(self.frame_skip):
+                self._move_forward()
+                if self._check_collision():
+                    self.collision = True
+                    break
+
+    def _update_robot_physics(self, action: int):
+        """Physics-based movement with acceleration and deceleration."""
+        # Target velocities based on action
+        target_linear_vel = 0.0
+        target_angular_vel = 0.0
+
+        if action in [0, 1, 2]:  # forward actions
+            target_linear_vel = self.max_speed
+        elif action == 5:  # stop
+            target_linear_vel = 0.0
+
+        if action == 1:  # forward-left
+            target_angular_vel = self.max_turn_rate / 2.0
+        elif action == 2:  # forward-right
+            target_angular_vel = -self.max_turn_rate / 2.0
+        elif action == 3:  # turn left
+            target_angular_vel = self.max_turn_rate
+        elif action == 4:  # turn right
+            target_angular_vel = -self.max_turn_rate
+
+        # Apply acceleration/deceleration
+        if target_linear_vel > self.robot_velocity:
+            self.robot_velocity = min(
+                self.robot_velocity + self.acceleration,
+                target_linear_vel
+            )
+        elif target_linear_vel < self.robot_velocity:
+            self.robot_velocity = max(
+                self.robot_velocity - self.deceleration,
+                target_linear_vel
+            )
+
+        # Clamp to max speed
+        self.robot_velocity = np.clip(self.robot_velocity, -self.max_speed / 2, self.max_speed)
+
+        # Apply angular acceleration
+        if target_angular_vel > self.robot_angular_velocity:
+            self.robot_angular_velocity = min(
+                self.robot_angular_velocity + self.max_turn_rate * 0.1,
+                target_angular_vel
+            )
+        elif target_angular_vel < self.robot_angular_velocity:
+            self.robot_angular_velocity = max(
+                self.robot_angular_velocity - self.max_turn_rate * 0.1,
+                target_angular_vel
+            )
+
+        # Apply turning with momentum
+        self.robot_angle += self.robot_angular_velocity * self.frame_skip
+        self.robot_angle = self._normalize_angle(self.robot_angle)
+
+        # Move forward based on current velocity
+        for _ in range(self.frame_skip):
+            direction = np.array(
+                [math.cos(self.robot_angle), math.sin(self.robot_angle)],
+                dtype=np.float32,
+            )
+            self.robot_pos = self.robot_pos + direction * self.robot_velocity
+            self.robot_pos = np.clip(self.robot_pos, -self.half, self.half).astype(
+                np.float32
+            )
+            if self._check_collision():
+                self.collision = True
+                # Bounce back on collision
+                self.robot_pos = self.robot_pos - direction * self.robot_velocity
+                self.robot_velocity = 0.0
+                break
+
+    def _update_moving_obstacles(self):
+        """Update positions of moving obstacles."""
+        for obstacle in self.obstacles:
+            if not obstacle.get("moving", False):
+                continue
+
+            # Get velocity components
+            vx = obstacle.get("vx", 0.0)
+            vy = obstacle.get("vy", 0.0)
+
+            if vx == 0 and vy == 0:
+                continue
+
+            # Move the obstacle
+            cx = obstacle.get("cx", obstacle.get("x", 0.0))
+            cy = obstacle.get("cy", obstacle.get("y", 0.0))
+
+            cx += vx
+            cy += vy
+
+            # Bounce off walls
+            half_size = obstacle.get("radius", 0.5)
+            if obstacle["shape"] == "rect":
+                half_size = max(obstacle.get("width", 1.0), obstacle.get("height", 1.0)) / 2
+
+            if cx - half_size < -self.half or cx + half_size > self.half:
+                vx = -vx
+                cx = np.clip(cx, -self.half + half_size, self.half - half_size)
+            if cy - half_size < -self.half or cy + half_size > self.half:
+                vy = -vy
+                cy = np.clip(cy, -self.half + half_size, self.half - half_size)
+
+            obstacle["cx"] = cx
+            obstacle["cy"] = cy
+            obstacle["vx"] = vx
+            obstacle["vy"] = vy
 
     def render(self):
         pass
@@ -344,6 +476,19 @@ class RobotNavigationEnv(gym.Env):
                         "radius": float(self.np_random.uniform(0.5, 1.3)),
                     }
 
+                # Randomly mark this obstacle as moving (optional feature)
+                if self.moving_obstacle_ratio > 0.0 and \
+                        self.np_random.random() < self.moving_obstacle_ratio:
+                    move_angle = float(self.np_random.uniform(0.0, 2.0 * np.pi))
+                    speed = float(self.obstacle_speed)
+                    obstacle["moving"] = True
+                    obstacle["cx"] = float(pos[0])
+                    obstacle["cy"] = float(pos[1])
+                    obstacle["vx"] = float(speed * math.cos(move_angle))
+                    obstacle["vy"] = float(speed * math.sin(move_angle))
+                else:
+                    obstacle["moving"] = False
+
                 # Keep obstacles away from robot start and target
                 bound = self._obstacle_bounding_radius(obstacle)
                 if self._distance(pos, robot) < bound + self.robot_radius + 1.5:
@@ -393,13 +538,23 @@ class RobotNavigationEnv(gym.Env):
 
     def _robot_hits_obstacle(self, point, obstacle):
         """Whether a disc of radius robot_radius at `point` overlaps an obstacle."""
+        # Get obstacle center (supports both static 'pos' and moving 'cx'/'cy')
+        if "cx" in obstacle and "cy" in obstacle:
+            obstacle_pos = np.array([obstacle["cx"], obstacle["cy"]], dtype=np.float64)
+        else:
+            obstacle_pos = np.asarray(obstacle["pos"], dtype=np.float64)
+
         if obstacle.get("shape") == "rect":
-            local = self._to_local(point, obstacle)
+            # Use updated _to_local with explicit position
+            c = math.cos(-obstacle["angle"])
+            s = math.sin(-obstacle["angle"])
+            d = np.asarray(point, dtype=np.float64) - obstacle_pos
+            local = np.array([c * d[0] - s * d[1], s * d[0] + c * d[1]])
             half_w = 0.5 * obstacle["width"] + self.robot_radius
             half_h = 0.5 * obstacle["height"] + self.robot_radius
             return abs(local[0]) < half_w and abs(local[1]) < half_h
 
-        distance = self._distance(point, obstacle["pos"])
+        distance = self._distance(point, obstacle_pos)
         return distance < self.robot_radius + obstacle["radius"]
 
     def _rect_ray_distance(self, origin, direction, obstacle):

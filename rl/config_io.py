@@ -161,7 +161,9 @@ def validate_run_config(data: Any) -> Dict[str, Any]:
             _reject_unknown_keys(params.keys(), allowed_params, "environment.params")
             for key, value in params.items():
                 if key in env_factory.ENV_STRING_PARAMS:
-                    if not isinstance(value, str):
+                    # ``layout`` and ``host`` are optional strings — ``None`` is
+                    # valid (means "no custom layout / no bridge host").
+                    if value is not None and not isinstance(value, str):
                         raise ValueError(
                             f"environment.params.{key} must be a string, got {value!r}"
                         )
@@ -194,7 +196,7 @@ def run_config_from_flat(
     source = flat.get("env_source") or "builtin"
 
     env_params = {
-        param: flat[f"env_{param}"] for param in env_factory.ENV_PARAM_NAMES
+        param: flat.get(f"env_{param}") for param in env_factory.ENV_PARAM_NAMES
     }
     # Bridge connection parameters only make sense for module environments.
     if source == "module":

@@ -61,6 +61,16 @@ DEFAULT_TRAINING_CONFIG: Dict[str, Any] = {
     "env_rect_obstacle_ratio": 0.5,
     "env_rect_rotation": 1,
 
+    # Moving obstacles (builtin v2; custom variant ignores ratio)
+    "env_moving_obstacle_ratio": 0.0,
+    "env_obstacle_speed": 0.1,
+
+    # Robot physics (disabled by default; matches environment_section defaults)
+    "env_use_robot_physics": 0,
+    "env_acceleration": 0.05,
+    "env_deceleration": 0.1,
+    "env_max_turn_rate": 45.0,
+
     # v3 custom map layout: JSON list of obstacle objects
     # (see simulation/envs/custom_navigation_env.py). Only used by the
     # "custom" builtin variant.
@@ -79,6 +89,8 @@ _INT_KEYS = {
     "mlp_hidden_dim", "kan_hidden_dim", "kan_grid_size",
     "env_max_steps", "env_frame_skip", "env_min_obstacles", "env_max_obstacles",
     "env_rect_rotation",
+    # Robot physics / moving obstacles (frontend sends env_use_robot_physics as 0/1)
+    "env_use_robot_physics",
 }
 
 _FLOAT_KEYS = {
@@ -87,6 +99,9 @@ _FLOAT_KEYS = {
     "huber_delta",
     "env_world_size", "env_sensor_range", "env_rect_obstacle_ratio",
     "env_robot_radius", "env_target_radius", "env_max_speed", "env_turn_angle_deg",
+    # Moving obstacles / robot physics
+    "env_moving_obstacle_ratio", "env_obstacle_speed",
+    "env_acceleration", "env_deceleration", "env_max_turn_rate",
 }
 
 
@@ -308,19 +323,27 @@ def train(
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    env_kwargs = {
-        "world_size": config["env_world_size"],
-        "max_steps": config["env_max_steps"],
-        "frame_skip": config["env_frame_skip"],
-        "min_obstacles": config["env_min_obstacles"],
-        "max_obstacles": config["env_max_obstacles"],
-        "sensor_range": config["env_sensor_range"],
-        "robot_radius": config["env_robot_radius"],
-        "target_radius": config["env_target_radius"],
-        "max_speed": config["env_max_speed"],
-        "turn_angle_deg": config["env_turn_angle_deg"],
-        "rect_obstacle_ratio": config["env_rect_obstacle_ratio"],
+    env_kwargs: Dict[str, Any] = {
+        "world_size": float(config["env_world_size"]),
+        "max_steps": int(config["env_max_steps"]),
+        "frame_skip": int(config["env_frame_skip"]),
+        "min_obstacles": int(config["env_min_obstacles"]),
+        "max_obstacles": int(config["env_max_obstacles"]),
+        "sensor_range": float(config["env_sensor_range"]),
+        "robot_radius": float(config["env_robot_radius"]),
+        "target_radius": float(config["env_target_radius"]),
+        "max_speed": float(config["env_max_speed"]),
+        "turn_angle_deg": float(config["env_turn_angle_deg"]),
+        "rect_obstacle_ratio": float(config["env_rect_obstacle_ratio"]),
         "rect_rotation": bool(config["env_rect_rotation"]),
+        # Moving obstacles (builtin v2 accepts them; custom ignores ratio)
+        "moving_obstacle_ratio": float(config.get("env_moving_obstacle_ratio", 0.0)),
+        "obstacle_speed": float(config.get("env_obstacle_speed", 0.1)),
+        # Robot physics (disabled by default so legacy runs are unchanged)
+        "use_robot_physics": bool(config.get("env_use_robot_physics", False)),
+        "acceleration": float(config.get("env_acceleration", 0.05)),
+        "deceleration": float(config.get("env_deceleration", 0.1)),
+        "max_turn_rate": float(config.get("env_max_turn_rate", 45.0)),
     }
 
     # The fixed-map layout only applies to the "custom" builtin variant;

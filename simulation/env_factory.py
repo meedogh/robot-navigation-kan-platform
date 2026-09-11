@@ -50,6 +50,14 @@ ENV_PARAM_NAMES: Tuple[str, ...] = (
     "rect_obstacle_ratio",
     "rect_rotation",
     "layout",
+    # Moving obstacles
+    "moving_obstacle_ratio",
+    "obstacle_speed",
+    # Robot physics
+    "use_robot_physics",
+    "acceleration",
+    "deceleration",
+    "max_turn_rate",
 )
 
 # Extra constructor parameters used by bridge-based external environments
@@ -164,6 +172,14 @@ def environment_section(
     rect_obstacle_ratio: float = 0.5,
     rect_rotation: bool = False,
     layout: Any = None,
+    # Moving obstacles
+    moving_obstacle_ratio: float = 0.0,
+    obstacle_speed: float = 0.1,
+    # Robot physics (disabled by default)
+    use_robot_physics: bool = False,
+    acceleration: float = 0.05,
+    deceleration: float = 0.1,
+    max_turn_rate: float = 45.0,
     host: str = "127.0.0.1",
     port: int = 5577,
     timeout: float = 10.0,
@@ -183,6 +199,14 @@ def environment_section(
         "target_radius": target_radius,
         "max_speed": max_speed,
         "turn_angle_deg": turn_angle_deg,
+        # Moving obstacles
+        "moving_obstacle_ratio": moving_obstacle_ratio,
+        "obstacle_speed": obstacle_speed,
+        # Robot physics
+        "use_robot_physics": use_robot_physics,
+        "acceleration": acceleration,
+        "deceleration": deceleration,
+        "max_turn_rate": max_turn_rate,
     }
 
     # Add builtin-variant-specific params
